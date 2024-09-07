@@ -69,8 +69,12 @@ public class CompactionStore {
         this.compactionLogTable = new ConcurrentHashMap<>();
         MessageStoreConfig config = defaultMessageStore.getMessageStoreConfig();
         String storeRootPath = config.getStorePathRootDir();
+        // 压缩类目标：compaction
         this.compactionPath = Paths.get(storeRootPath, COMPACTION_DIR).toString();
+        // 子目录具体类型文件
+        // compaction/compactionLog
         this.compactionLogPath = Paths.get(compactionPath, COMPACTION_LOG_DIR).toString();
+        // compaction/compactionCq
         this.compactionCqPath = Paths.get(compactionPath, COMPACTION_CQ_DIR).toString();
         this.positionMgr = new CompactionPositionMgr(compactionPath);
         this.compactionThreadNum = Math.min(Runtime.getRuntime().availableProcessors(), Math.max(1, config.getCompactionThreadNum()));

@@ -186,6 +186,7 @@ public class ClientManageProcessor implements NettyRequestProcessor {
             if (heartbeatData.isWithoutSub()) {
                 changed = this.brokerController.getConsumerManager().registerConsumerWithoutSub(consumerData.getGroupName(), clientChannelInfo, consumerData.getConsumeType(), consumerData.getMessageModel(), consumerData.getConsumeFromWhere(), isNotifyConsumerIdsChangedEnable);
             } else {
+                // 注册当前consumer到本地
                 changed = this.brokerController.getConsumerManager().registerConsumer(consumerData.getGroupName(), clientChannelInfo, consumerData.getConsumeType(), consumerData.getMessageModel(), consumerData.getConsumeFromWhere(), consumerData.getSubscriptionDataSet(), isNotifyConsumerIdsChangedEnable);
             }
             if (changed) {

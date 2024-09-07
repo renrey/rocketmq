@@ -41,11 +41,14 @@ public class Consumer {
             String subscription = commandLine.getOptionValue('s');
             final String returnFailedHalf = commandLine.getOptionValue('f');
 
+            // 等待push
             DefaultMQPushConsumer consumer = new DefaultMQPushConsumer(group);
             consumer.setInstanceName(Long.toString(System.currentTimeMillis()));
 
+            // 订阅topic，在本地保存对topic的订阅信息-》如果start过mq组件，这里与所有broker发送心跳
             consumer.subscribe(topic, subscription);
 
+            // 绑定处理函数-》push 过来执行
             consumer.registerMessageListener(new MessageListenerConcurrently() {
                 AtomicLong consumeTimes = new AtomicLong(0);
 

@@ -196,16 +196,19 @@ public class ConsumerOffsetManager extends ConfigManager {
         final long offset) {
         // topic@group
         String key = topic + TOPIC_GROUP_SEPARATOR + group;
+        // key是 topic+group唯一 -》group在topic下
         this.commitOffset(clientHost, key, queueId, offset);
     }
 
     private void commitOffset(final String clientHost, final String key, final int queueId, final long offset) {
+        // 就是以topic@group找到offset map
         ConcurrentMap<Integer, Long> map = this.offsetTable.get(key);
-        if (null == map) {
+        if (null == map) {// 即当前group未绑过这个topic
             map = new ConcurrentHashMap<>(32);
             map.put(queueId, offset);
             this.offsetTable.put(key, map);
         } else {
+            // 直接更新下面queue的offset即可
             Long storeOffset = map.put(queueId, offset);
             if (storeOffset != null && offset < storeOffset) {
                 LOG.warn("[NOTIFYME]update consumer offset less than store. clientHost={}, key={}, queueId={}, requestOffset={}, storeOffset={}", clientHost, key, queueId, offset, storeOffset);

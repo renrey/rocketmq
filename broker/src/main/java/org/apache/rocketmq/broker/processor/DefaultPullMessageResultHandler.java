@@ -147,9 +147,12 @@ public class DefaultPullMessageResultHandler implements PullMessageResultHandler
                     return response;
                 } else {
                     try {
+                        // FileRegion：netty中用于文件传输（文件内容零拷贝），默认实现的transferTo中调用fileChannel的transferTo（即sendfile）
+                        // rocketmq自己实现的ManyMessageTransfer：transferTo方法中实现文件内容传输
                         FileRegion fileRegion =
                             new ManyMessageTransfer(response.encodeHeader(getMessageResult.getBufferTotalSize()), getMessageResult);
                         RemotingCommand finalResponse = response;
+                        // 执行传输
                         channel.writeAndFlush(fileRegion)
                             .addListener((ChannelFutureListener) future -> {
                                 getMessageResult.release();
@@ -158,6 +161,7 @@ public class DefaultPullMessageResultHandler implements PullMessageResultHandler
                                     .put(LABEL_RESPONSE_CODE, RemotingHelper.getResponseCodeDesc(finalResponse.getCode()))
                                     .put(LABEL_RESULT, RemotingMetricsManager.getWriteAndFlushResult(future))
                                     .build();
+                                // 记录延迟
                                 RemotingMetricsManager.rpcLatency.record(request.getProcessTimer().elapsed(TimeUnit.MILLISECONDS), attributes);
                                 if (!future.isSuccess()) {
                                     log.error("Fail to transfer messages from page cache to {}", channel.remoteAddress(), future.cause());
@@ -169,6 +173,7 @@ public class DefaultPullMessageResultHandler implements PullMessageResultHandler
                     }
                     return null;
                 }
+            // 没找到offsetpull
             case ResponseCode.PULL_NOT_FOUND:
                 final boolean hasSuspendFlag = PullSysFlag.hasSuspendFlag(requestHeader.getSysFlag());
                 final long suspendTimeoutMillisLong = hasSuspendFlag ? requestHeader.getSuspendTimeoutMillis() : 0;

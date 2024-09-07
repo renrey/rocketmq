@@ -16,13 +16,14 @@
  */
 package org.apache.rocketmq.client.consumer.listener;
 
+// 并发消费：只能2种
 public enum ConsumeConcurrentlyStatus {
     /**
      * Success consumption
      */
-    CONSUME_SUCCESS,
+    CONSUME_SUCCESS,// 消费成功
     /**
      * Failure consumption,later try to consume
      */
-    RECONSUME_LATER;
+    RECONSUME_LATER;// 失败重试
 }

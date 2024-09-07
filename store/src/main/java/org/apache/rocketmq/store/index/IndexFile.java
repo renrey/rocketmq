@@ -54,10 +54,11 @@ public class IndexFile {
 
     public IndexFile(final String fileName, final int hashSlotNum, final int indexNum,
         final long endPhyOffset, final long endTimestamp) throws IOException {
+        // 文件组成：40b header + 500w个hashslot（每个4b） + 2kw个index（每个20b，1个slot用4个index？）
         this.fileTotalSize =
             IndexHeader.INDEX_HEADER_SIZE + (hashSlotNum * hashSlotSize) + (indexNum * indexSize);
         this.mappedFile = new DefaultMappedFile(fileName, fileTotalSize);
-        this.mappedByteBuffer = this.mappedFile.getMappedByteBuffer();
+        this.mappedByteBuffer = this.mappedFile.getMappedByteBuffer();// MMAP
         this.hashSlotNum = hashSlotNum;
         this.indexNum = indexNum;
 
@@ -94,9 +95,10 @@ public class IndexFile {
 
     public void flush() {
         long beginTime = System.currentTimeMillis();
-        if (this.mappedFile.hold()) {
+        if (this.mappedFile.hold()) {// 加锁并发
+            // 把属性写入header
             this.indexHeader.updateByteBuffer();
-            this.mappedByteBuffer.force();
+            this.mappedByteBuffer.force();// fysnc
             this.mappedFile.release();
             log.info("flush index file elapsed time(ms) " + (System.currentTimeMillis() - beginTime));
         }
@@ -112,20 +114,21 @@ public class IndexFile {
 
     public boolean putKey(final String key, final long phyOffset, final long storeTimestamp) {
         if (this.indexHeader.getIndexCount() < this.indexNum) {
-            int keyHash = indexKeyHashMethod(key);
-            int slotPos = keyHash % this.hashSlotNum;
-            int absSlotPos = IndexHeader.INDEX_HEADER_SIZE + slotPos * hashSlotSize;
+            int keyHash = indexKeyHashMethod(key);// key的hashcode
+            int slotPos = keyHash % this.hashSlotNum;// 位置就是hash对slot数量取模
+            int absSlotPos = IndexHeader.INDEX_HEADER_SIZE + slotPos * hashSlotSize;// 物理位置
 
             try {
-
+                // 获取对应slot的值
                 int slotValue = this.mappedByteBuffer.getInt(absSlotPos);
                 if (slotValue <= invalidIndex || slotValue > this.indexHeader.getIndexCount()) {
-                    slotValue = invalidIndex;
+                    slotValue = invalidIndex;// 无效值
                 }
 
+                // 时间偏移量-》与第一个index的
                 long timeDiff = storeTimestamp - this.indexHeader.getBeginTimestamp();
 
-                timeDiff = timeDiff / 1000;
+                timeDiff = timeDiff / 1000;// 转秒
 
                 if (this.indexHeader.getBeginTimestamp() <= 0) {
                     timeDiff = 0;
@@ -135,15 +138,25 @@ public class IndexFile {
                     timeDiff = 0;
                 }
 
+                // 当前消息index的位置 -》按照index写入顺序
                 int absIndexPos =
                     IndexHeader.INDEX_HEADER_SIZE + this.hashSlotNum * hashSlotSize
                         + this.indexHeader.getIndexCount() * indexSize;
 
+                /**
+                 * 即index文件是3个区域：
+                 * 1. header -- 当前index文件统计
+                 * 2. slot -- 对应统计信息
+                 * 3. index -- 具体消息的index
+                 */
+
+                // 写入index区域 -》hash、下标、时间偏移量、slot
                 this.mappedByteBuffer.putInt(absIndexPos, keyHash);
                 this.mappedByteBuffer.putLong(absIndexPos + 4, phyOffset);
                 this.mappedByteBuffer.putInt(absIndexPos + 4 + 8, (int) timeDiff);
                 this.mappedByteBuffer.putInt(absIndexPos + 4 + 8 + 4, slotValue);
 
+                // slot更新成当前index数量
                 this.mappedByteBuffer.putInt(absSlotPos, this.indexHeader.getIndexCount());
 
                 if (this.indexHeader.getIndexCount() <= 1) {
@@ -154,7 +167,7 @@ public class IndexFile {
                 if (invalidIndex == slotValue) {
                     this.indexHeader.incHashSlotCount();
                 }
-                this.indexHeader.incIndexCount();
+                this.indexHeader.incIndexCount();// index数量+1
                 this.indexHeader.setEndPhyOffset(phyOffset);
                 this.indexHeader.setEndTimestamp(storeTimestamp);
 

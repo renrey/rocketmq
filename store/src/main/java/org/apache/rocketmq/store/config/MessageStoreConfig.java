@@ -391,6 +391,7 @@ public class MessageStoreConfig {
     private int accessMessageInMemoryHotRatio = 26;
     /**
      * Build ConsumeQueue concurrently with multi-thread
+     * 构建cq并发使用多线程
      */
     private boolean enableBuildConsumeQueueConcurrently = false;
 

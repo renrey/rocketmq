@@ -101,6 +101,8 @@ public class BatchConsumeQueue implements ConsumeQueueInterface {
         this.topic = topic;
         this.queueId = queueId;
 
+        // 目录：compaction/compactionCq
+        // 具体：compaction/compactionCq/topic名/queueId/
         if (StringUtils.isBlank(subfolder)) {
             String queueDir = this.storePath + File.separator + topic + File.separator + queueId;
             this.mappedFileQueue = new MappedFileQueue(queueDir, mappedFileSize, null);
@@ -554,13 +556,13 @@ public class BatchConsumeQueue implements ConsumeQueueInterface {
         }
 
         this.byteBufferItem.flip();
-        this.byteBufferItem.limit(CQ_STORE_UNIT_SIZE);
-        this.byteBufferItem.putLong(offset);
-        this.byteBufferItem.putInt(size);
+        this.byteBufferItem.limit(CQ_STORE_UNIT_SIZE);// 1个cq单位大小=46b
+        this.byteBufferItem.putLong(offset);// 逻辑下标
+        this.byteBufferItem.putInt(size);// 内容大小
         this.byteBufferItem.putLong(tagsCode);
-        this.byteBufferItem.putLong(storeTime);
-        this.byteBufferItem.putLong(msgBaseOffset);
-        this.byteBufferItem.putShort(batchSize);
+        this.byteBufferItem.putLong(storeTime);// 时间
+        this.byteBufferItem.putLong(msgBaseOffset);// 开始下标
+        this.byteBufferItem.putShort(batchSize);// 批数量
         this.byteBufferItem.putInt(INVALID_POS);
         this.byteBufferItem.putInt(0); // 4 bytes reserved
 

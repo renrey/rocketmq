@@ -186,6 +186,7 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
                 nettyClientConfig.getClientWorkerThreads(),
                 new ThreadFactoryImpl("NettyClientWorkerThread_"));
         }
+        // netty
         Bootstrap handler = this.bootstrap.group(this.eventLoopGroupWorker).channel(NioSocketChannel.class)
             .option(ChannelOption.TCP_NODELAY, true)
             .option(ChannelOption.SO_KEEPALIVE, false)
@@ -207,8 +208,8 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
                         new NettyEncoder(),
                         new NettyDecoder(),
                         new IdleStateHandler(0, 0, nettyClientConfig.getClientChannelMaxIdleTimeSeconds()),
-                        new NettyConnectManageHandler(),
-                        new NettyClientHandler());
+                        new NettyConnectManageHandler(),// 连接
+                        new NettyClientHandler());//
                 }
             });
         if (nettyClientConfig.getClientSocketSndBufSize() > 0) {
@@ -601,6 +602,7 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
 
     private Channel getAndCreateChannel(final String addr) throws InterruptedException {
         if (null == addr) {
+            // 没地址，则创建namesrv的channel
             return getAndCreateNameserverChannel();
         }
 
@@ -661,36 +663,42 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
     }
 
     private Channel createChannel(final String addr) throws InterruptedException {
+        // 已有复用
         ChannelWrapper cw = this.channelTables.get(addr);
         if (cw != null && cw.isOK()) {
             return cw.getChannel();
         }
 
+        // 加锁，控制只有1个线程执行
         if (this.lockChannelTables.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
             try {
                 boolean createNewConnection;
+                // 验证是否并发被写入
                 cw = this.channelTables.get(addr);
                 if (cw != null) {
 
                     if (cw.isOK()) {
                         return cw.getChannel();
                     } else if (!cw.getChannelFuture().isDone()) {
+                        // 未完成-》等待即可
                         createNewConnection = false;
-                    } else {
-                        this.channelTables.remove(addr);
-                        createNewConnection = true;
+                    } else {// 不active ，但又完成
+                        this.channelTables.remove(addr);// 移除
+                        createNewConnection = true;// 重新建立
                     }
                 } else {
-                    createNewConnection = true;
+                    createNewConnection = true;// 新建立
                 }
 
+                // 发起连接
                 if (createNewConnection) {
                     String[] hostAndPort = getHostAndPort(addr);
+                    // 发起
                     ChannelFuture channelFuture = fetchBootstrap(addr)
                         .connect(hostAndPort[0], Integer.parseInt(hostAndPort[1]));
                     LOGGER.info("createChannel: begin to connect remote host[{}] asynchronously", addr);
                     cw = new ChannelWrapper(channelFuture);
-                    this.channelTables.put(addr, cw);
+                    this.channelTables.put(addr, cw);//保存
                 }
             } catch (Exception e) {
                 LOGGER.error("createChannel: create channel exception", e);
@@ -724,6 +732,7 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
         throws InterruptedException, RemotingConnectException, RemotingTooMuchRequestException, RemotingTimeoutException,
         RemotingSendRequestException {
         long beginStartTime = System.currentTimeMillis();
+        // 网络channel
         final Channel channel = this.getAndCreateChannel(addr);
         String channelRemoteAddr = RemotingHelper.parseChannelRemoteAddr(channel);
         if (channel != null && channel.isActive()) {
@@ -733,6 +742,7 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
                 if (timeoutMillis < costTime) {
                     throw new RemotingTooMuchRequestException("invokeAsync call the addr[" + channelRemoteAddr + "] timeout");
                 }
+                // 异步调用
                 this.invokeAsyncImpl(channel, request, timeoutMillis - costTime, new InvokeCallbackWrapper(invokeCallback, addr));
             } catch (RemotingSendRequestException e) {
                 LOGGER.warn("invokeAsync: send request exception, so close the channel[{}]", channelRemoteAddr);
@@ -748,6 +758,7 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
     @Override
     public void invokeOneway(String addr, RemotingCommand request, long timeoutMillis) throws InterruptedException,
         RemotingConnectException, RemotingTooMuchRequestException, RemotingTimeoutException, RemotingSendRequestException {
+        // 获取channel，不存在则创建
         final Channel channel = this.getAndCreateChannel(addr);
         String channelRemoteAddr = RemotingHelper.parseChannelRemoteAddr(channel);
         if (channel != null && channel.isActive()) {

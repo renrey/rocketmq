@@ -16,6 +16,7 @@
  */
 package org.apache.rocketmq.remoting.rpc;
 
+import io.netty.channel.Channel;
 import io.netty.util.concurrent.ImmediateEventExecutor;
 import io.netty.util.concurrent.Promise;
 import java.util.ArrayList;
@@ -30,14 +31,11 @@ import org.apache.rocketmq.remoting.protocol.RemotingSerializable;
 import org.apache.rocketmq.remoting.protocol.RequestCode;
 import org.apache.rocketmq.remoting.protocol.ResponseCode;
 import org.apache.rocketmq.remoting.protocol.admin.TopicStatsTable;
-import org.apache.rocketmq.remoting.protocol.header.GetEarliestMsgStoretimeResponseHeader;
-import org.apache.rocketmq.remoting.protocol.header.GetMaxOffsetResponseHeader;
-import org.apache.rocketmq.remoting.protocol.header.GetMinOffsetResponseHeader;
-import org.apache.rocketmq.remoting.protocol.header.PullMessageResponseHeader;
-import org.apache.rocketmq.remoting.protocol.header.QueryConsumerOffsetResponseHeader;
-import org.apache.rocketmq.remoting.protocol.header.SearchOffsetResponseHeader;
-import org.apache.rocketmq.remoting.protocol.header.UpdateConsumerOffsetResponseHeader;
+import org.apache.rocketmq.remoting.protocol.header.*;
+import org.apache.rocketmq.remoting.protocol.heartbeat.SubscriptionData;
 import org.apache.rocketmq.remoting.protocol.statictopic.TopicConfigAndQueueMapping;
+import org.apache.rocketmq.remoting.protocol.statictopic.TopicQueueMappingContext;
+import org.apache.rocketmq.remoting.protocol.subscription.SubscriptionGroupConfig;
 
 public class RpcClientImpl implements RpcClient {
 
@@ -79,6 +77,8 @@ public class RpcClientImpl implements RpcClient {
                 }
             }
         }
+
+        // 通过broker名字获取地址
         String addr = getBrokerAddrByNameOrException(request.getHeader().bname);
         Promise<RpcResponse> rpcResponsePromise = null;
         try {
@@ -187,6 +187,7 @@ public class RpcClientImpl implements RpcClient {
             }
         };
 
+        // 异步执行
         this.remotingClient.invokeAsync(addr, requestCommand, timeoutMillis, callback);
         return rpcResponsePromise;
     }

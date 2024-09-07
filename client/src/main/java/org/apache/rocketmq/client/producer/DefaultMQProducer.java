@@ -310,6 +310,8 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
     public void start() throws MQClientException {
         this.setProducerGroup(withNamespace(this.producerGroup));
         this.defaultMQProducerImpl.start();
+
+        // 批量使用-》类似kafka，的缓冲区
         if (this.produceAccumulator != null) {
             this.produceAccumulator.start();
         }
@@ -387,9 +389,12 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
     public SendResult send(
         Message msg) throws MQClientException, RemotingException, MQBrokerException, InterruptedException {
         msg.setTopic(withNamespace(msg.getTopic()));
+        // 开启批量发送，但msg不是内置批消息类型
         if (this.getAutoBatch() && !(msg instanceof MessageBatch)) {
+            // 批量发送先把msg缓存起来
             return sendByAccumulator(msg, null, null);
         } else {
+            // 直接发送
             return sendDirect(msg, null, null);
         }
     }
@@ -678,6 +683,7 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
         // send in sync mode
         if (sendCallback == null) {
             if (mq == null) {
+                // 直接发送消息，无指定queue
                 return this.defaultMQProducerImpl.send(msg);
             } else {
                 return this.defaultMQProducerImpl.send(msg, mq);

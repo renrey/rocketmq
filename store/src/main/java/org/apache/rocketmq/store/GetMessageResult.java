@@ -121,6 +121,7 @@ public class GetMessageResult {
 
     public void addMessage(final SelectMappedBufferResult mapedBuffer, final long queueOffset) {
         this.messageMapedList.add(mapedBuffer);
+        // 这里保存了buffer
         this.messageBufferList.add(mapedBuffer.getByteBuffer());
         this.bufferTotalSize += mapedBuffer.getSize();
         this.msgCount4Commercial += (int) Math.ceil(

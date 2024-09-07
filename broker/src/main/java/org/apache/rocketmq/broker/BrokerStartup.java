@@ -47,11 +47,14 @@ public class BrokerStartup {
     public static final SystemConfigFileHelper CONFIG_FILE_HELPER = new SystemConfigFileHelper();
 
     public static void main(String[] args) {
+        // 1. 根据命令参数创建并初始化broker
+        // 2. 启动broker
         start(createBrokerController(args));
     }
 
     public static BrokerController start(BrokerController controller) {
         try {
+            // 启动
             controller.start();
 
             String tip = String.format("The broker[%s, %s] boot success. serializeType=%s",
@@ -82,13 +85,14 @@ public class BrokerStartup {
     public static BrokerController buildBrokerController(String[] args) throws Exception {
         System.setProperty(RemotingCommand.REMOTING_VERSION_KEY, Integer.toString(MQVersion.CURRENT_VERSION));
 
-        final BrokerConfig brokerConfig = new BrokerConfig();
-        final NettyServerConfig nettyServerConfig = new NettyServerConfig();
-        final NettyClientConfig nettyClientConfig = new NettyClientConfig();
-        final MessageStoreConfig messageStoreConfig = new MessageStoreConfig();
-        nettyServerConfig.setListenPort(10911);
+        final BrokerConfig brokerConfig = new BrokerConfig();// broker配置
+        final NettyServerConfig nettyServerConfig = new NettyServerConfig();// netty服务端
+        final NettyClientConfig nettyClientConfig = new NettyClientConfig();// netty客户端
+        final MessageStoreConfig messageStoreConfig = new MessageStoreConfig();// 存储配置
+        nettyServerConfig.setListenPort(10911);// 默认端口：10911
         messageStoreConfig.setHaListenPort(0);
 
+        // 转换命令参数
         Options options = ServerUtil.buildCommandlineOptions(new Options());
         CommandLine commandLine = ServerUtil.parseCmdLine(
             "mqbroker", args, buildCommandlineOptions(options), new DefaultParser());
@@ -204,9 +208,11 @@ public class BrokerStartup {
         MixAll.printObjectProperties(log, nettyClientConfig);
         MixAll.printObjectProperties(log, messageStoreConfig);
 
+        // 创建controller对象
         final BrokerController controller = new BrokerController(
             brokerConfig, nettyServerConfig, nettyClientConfig, messageStoreConfig);
 
+        // 把配置参数 更新到 controller对象
         // Remember all configs to prevent discard
         controller.getConfiguration().registerConfig(properties);
 
@@ -236,8 +242,10 @@ public class BrokerStartup {
 
     public static BrokerController createBrokerController(String[] args) {
         try {
-            BrokerController controller = buildBrokerController(args);
-            boolean initResult = controller.initialize();
+            // 创建并初始化BrokerController
+            BrokerController controller = buildBrokerController(args);// 根据命令参数创
+            boolean initResult = controller.initialize();// 初始化
+            // 失败退出
             if (!initResult) {
                 controller.shutdown();
                 System.exit(-3);

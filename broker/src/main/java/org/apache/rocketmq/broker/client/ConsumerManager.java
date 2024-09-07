@@ -108,6 +108,7 @@ public class ConsumerManager {
     }
 
     public ConsumerGroupInfo getConsumerGroupInfo(final String group) {
+        // 从consumerTable 获取
         return getConsumerGroupInfo(group, false);
     }
 
@@ -181,14 +182,17 @@ public class ConsumerManager {
             callConsumerIdsChangeListener(ConsumerGroupEvent.CLIENT_REGISTER, group, clientChannelInfo,
                 subList.stream().map(SubscriptionData::getTopic).collect(Collectors.toSet()));
             ConsumerGroupInfo tmp = new ConsumerGroupInfo(group, consumeType, messageModel, consumeFromWhere);
+            // 新增这个group的对象到table
             ConsumerGroupInfo prev = this.consumerTable.putIfAbsent(group, tmp);
             consumerGroupInfo = prev != null ? prev : tmp;
         }
 
+        // 更新当前client信息到 这个组信息中
         boolean r1 =
             consumerGroupInfo.updateChannel(clientChannelInfo, consumeType, messageModel,
                 consumeFromWhere);
         boolean r2 = false;
+        // 本次client的订阅关系更新
         if (updateSubscription) {
             r2 = consumerGroupInfo.updateSubscription(subList);
         }
@@ -213,6 +217,7 @@ public class ConsumerManager {
         ConsumerGroupInfo consumerGroupInfo = this.consumerTable.get(group);
         if (null == consumerGroupInfo) {
             ConsumerGroupInfo tmp = new ConsumerGroupInfo(group, consumeType, messageModel, consumeFromWhere);
+            // 新增这个group的对象到table中
             ConsumerGroupInfo prev = this.consumerTable.putIfAbsent(group, tmp);
             consumerGroupInfo = prev != null ? prev : tmp;
         }

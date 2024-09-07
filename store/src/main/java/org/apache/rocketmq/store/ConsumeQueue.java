@@ -58,7 +58,7 @@ public class ConsumeQueue implements ConsumeQueueInterface, FileQueueLifeCycle {
      * </pre>
      * ConsumeQueue's store unit. Size: CommitLog Physical Offset(8) + Body Size(4) + Tag HashCode(8) = 20 Bytes
      */
-    public static final int CQ_STORE_UNIT_SIZE = 20;
+    public static final int CQ_STORE_UNIT_SIZE = 20;// ConsumeQueue里1个单位占用大小
     public static final int MSG_TAG_OFFSET_INDEX = 12;
     private static final Logger LOG_ERROR = LoggerFactory.getLogger(LoggerName.STORE_ERROR_LOGGER_NAME);
 
@@ -92,12 +92,14 @@ public class ConsumeQueue implements ConsumeQueueInterface, FileQueueLifeCycle {
         this.topic = topic;
         this.queueId = queueId;
 
+        // 目录：xx/topic/queueId/
         String queueDir = this.storePath
             + File.separator + topic
             + File.separator + queueId;
 
         this.mappedFileQueue = new MappedFileQueue(queueDir, mappedFileSize, null);
 
+        // 申请中间缓存
         this.byteBufferIndex = ByteBuffer.allocate(CQ_STORE_UNIT_SIZE);
 
         if (messageStore.getMessageStoreConfig().isEnableConsumeQueueExt()) {
@@ -518,8 +520,9 @@ public class ConsumeQueue implements ConsumeQueueInterface, FileQueueLifeCycle {
 
     @Override
     public boolean flush(final int flushLeastPages) {
+        // 执行flush
         boolean result = this.mappedFileQueue.flush(flushLeastPages);
-        if (isExtReadEnable()) {
+        if (isExtReadEnable()) {// 外部存储？默认没开启
             result = result & this.consumeQueueExt.flush(flushLeastPages);
         }
 
@@ -695,7 +698,8 @@ public class ConsumeQueue implements ConsumeQueueInterface, FileQueueLifeCycle {
                         topic, queueId, request.getCommitLogOffset());
                 }
             }
-            boolean result = this.putMessagePositionInfo(request.getCommitLogOffset(),
+            // 放入
+            boolean result = this.putMessagePositionInfo(request.getCommitLogOffset(),// 本次消息的offset
                 request.getMsgSize(), tagsCode, request.getConsumeQueueOffset());
             if (result) {
                 if (this.messageStore.getMessageStoreConfig().getBrokerRole() == BrokerRole.SLAVE ||
@@ -795,9 +799,14 @@ public class ConsumeQueue implements ConsumeQueueInterface, FileQueueLifeCycle {
 
     @Override
     public void assignQueueOffset(QueueOffsetOperator queueOffsetOperator, MessageExtBrokerInner msg) {
-        String topicQueueKey = getTopic() + "-" + getQueueId();
-        long queueOffset = queueOffsetOperator.getQueueOffset(topicQueueKey);
-        msg.setQueueOffset(queueOffset);
+        String topicQueueKey = getTopic() + "-" + getQueueId();// 当前queue标识
+        /**
+         * 申请当前消息的offset
+         */
+        long queueOffset = queueOffsetOperator.getQueueOffset(topicQueueKey);// 在map获取对应queue的v，初始值是0
+        msg.setQueueOffset(queueOffset);// 等于在queueOffsetOperator中对应的queue的offset值已被分配
+
+        // 哪里触发map的值+1？外层本次完整写入请求完成后，会更新自增
 
 
         // Handling the multi dispatch message. In the context of a light message queue (as defined in RIP-28),
@@ -888,20 +897,21 @@ public class ConsumeQueue implements ConsumeQueueInterface, FileQueueLifeCycle {
 
         this.byteBufferIndex.flip();
         this.byteBufferIndex.limit(CQ_STORE_UNIT_SIZE);
-        this.byteBufferIndex.putLong(offset);
-        this.byteBufferIndex.putInt(size);
-        this.byteBufferIndex.putLong(tagsCode);
+        this.byteBufferIndex.putLong(offset);// 第1个：逻辑offset
+        this.byteBufferIndex.putInt(size);// 第2个：消息大小
+        this.byteBufferIndex.putLong(tagsCode);// 3：标签编码
 
         final long expectLogicOffset = cqOffset * CQ_STORE_UNIT_SIZE;
 
+        // 通过逻辑offset找到对应cq文件，实际是最后的1个cq
         MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile(expectLogicOffset);
         if (mappedFile != null) {
-
+            // 第1个创建的——》本地broker当前queue下没cq文件
             if (mappedFile.isFirstCreateInQueue() && cqOffset != 0 && mappedFile.getWrotePosition() == 0) {
                 this.minLogicOffset = expectLogicOffset;
-                this.mappedFileQueue.setFlushedWhere(expectLogicOffset);
-                this.mappedFileQueue.setCommittedWhere(expectLogicOffset);
-                this.fillPreBlank(mappedFile, expectLogicOffset);
+                this.mappedFileQueue.setFlushedWhere(expectLogicOffset);// 设置当前cq的刷盘开始offset
+                this.mappedFileQueue.setCommittedWhere(expectLogicOffset);// 提交commit offset
+                this.fillPreBlank(mappedFile, expectLogicOffset);// 写入文件头
                 log.info("fill pre blank space " + mappedFile.getFileName() + " " + expectLogicOffset + " "
                     + mappedFile.getWrotePosition());
             }
@@ -927,6 +937,8 @@ public class ConsumeQueue implements ConsumeQueueInterface, FileQueueLifeCycle {
                 }
             }
             this.setMaxPhysicOffset(offset + size);
+
+            // 往对应文件，写入当前cq内容，即索引内容（20b）！！！
             return mappedFile.appendMessage(this.byteBufferIndex.array());
         }
         return false;
@@ -946,10 +958,13 @@ public class ConsumeQueue implements ConsumeQueueInterface, FileQueueLifeCycle {
 
     public SelectMappedBufferResult getIndexBuffer(final long startIndex) {
         int mappedFileSize = this.mappedFileSize;
+        // 通过消息offset转换拿到在cq（逻辑）下标 （通过offset*20单位大小）
         long offset = startIndex * CQ_STORE_UNIT_SIZE;
-        if (offset >= this.getMinLogicOffset()) {
+        if (offset >= this.getMinLogicOffset()) {// 超过最小-》可读取
+            // 拿到这个 cq逻辑offset的文件
             MappedFile mappedFile = this.mappedFileQueue.findMappedFileByOffset(offset);
             if (mappedFile != null) {
+                // 得到从对应位置开始的buffer
                 return mappedFile.selectMappedBuffer((int) (offset % mappedFileSize));
             }
         }

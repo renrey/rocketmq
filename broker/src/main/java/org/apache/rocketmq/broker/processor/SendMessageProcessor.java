@@ -86,6 +86,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         switch (request.getCode()) {
             case RequestCode.CONSUMER_SEND_MSG_BACK:
                 return this.consumerSendMsgBack(ctx, request);
+            // 普通投递消息
             default:
                 SendMessageRequestHeader requestHeader = parseRequestHeader(request);
                 if (requestHeader == null) {
@@ -105,11 +106,14 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
                     return errorResponse;
                 }
 
+                // 注意执行业务操作是在netty的线程执行
                 RemotingCommand response;
                 if (requestHeader.isBatch()) {
+                    // 批量发
                     response = this.sendBatchMessage(ctx, request, sendMessageContext, requestHeader, mappingContext,
                         (ctx1, response1) -> executeSendMessageHookAfter(response1, ctx1));
                 } else {
+                    // 单条发
                     response = this.sendMessage(ctx, request, sendMessageContext, requestHeader, mappingContext,
                         (ctx12, response12) -> executeSendMessageHookAfter(response12, ctx12));
                 }
@@ -242,9 +246,13 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
 
         final byte[] body = request.getBody();
 
+        // 目标队列id
         int queueIdInt = requestHeader.getQueueId();
+
+        // 获取目标topic信息
         TopicConfig topicConfig = this.brokerController.getTopicConfigManager().selectTopicConfig(requestHeader.getTopic());
 
+        // 没有指定队列，则随机分配queue
         if (queueIdInt < 0) {
             queueIdInt = randomQueueId(topicConfig.getWriteQueueNums());
         }
@@ -253,6 +261,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         msgInner.setTopic(requestHeader.getTopic());
         msgInner.setQueueId(queueIdInt);
 
+        // 转换消息header
         Map<String, String> oriProps = MessageDecoder.string2messageProperties(requestHeader.getProperties());
         if (!handleRetryAndDLQ(requestHeader, response, request, msgInner, topicConfig, oriProps)) {
             return response;
@@ -261,8 +270,11 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         msgInner.setBody(body);
         msgInner.setFlag(requestHeader.getFlag());
 
+
         String uniqKey = oriProps.get(MessageConst.PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
+        // 没指定UNIQ_KEY，分配
         if (uniqKey == null || uniqKey.length() <= 0) {
+            // 分配UNIQ_KEY
             uniqKey = MessageClientIDSetter.createUniqID();
             oriProps.put(MessageConst.PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX, uniqKey);
         }
@@ -291,6 +303,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         // Map<String, String> oriProps = MessageDecoder.string2messageProperties(requestHeader.getProperties());
         String traFlag = oriProps.get(MessageConst.PROPERTY_TRANSACTION_PREPARED);
         boolean sendTransactionPrepareMessage = false;
+        // 判断事务消息？
         if (Boolean.parseBoolean(traFlag)
             && !(msgInner.getReconsumeTimes() > 0 && msgInner.getDelayTimeLevel() > 0)) { //For client under version 4.6.1
             if (this.brokerController.getBrokerConfig().isRejectTransactionMessage()) {
@@ -306,6 +319,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         long beginTimeMillis = this.brokerController.getMessageStore().now();
 
         if (brokerController.getBrokerConfig().isAsyncSendEnable()) {
+            // 异步发送相关
             CompletableFuture<PutMessageResult> asyncPutMessageFuture;
             if (sendTransactionPrepareMessage) {
                 asyncPutMessageFuture = this.brokerController.getTransactionalMessageService().asyncPrepareMessage(msgInner);
@@ -327,10 +341,13 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             // Returns null to release the send message thread
             return null;
         } else {
+            // 正常同步处理
             PutMessageResult putMessageResult = null;
             if (sendTransactionPrepareMessage) {
+                // 事务消息处理
                 putMessageResult = this.brokerController.getTransactionalMessageService().prepareMessage(msgInner);
             } else {
+                // 普通消息
                 putMessageResult = this.brokerController.getMessageStore().putMessage(msgInner);
             }
             handlePutMessageResult(putMessageResult, response, request, msgInner, responseHeader, sendMessageContext, ctx, queueIdInt, beginTimeMillis, mappingContext, BrokerMetricsManager.getMessageType(requestHeader));

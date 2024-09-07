@@ -19,16 +19,21 @@ package org.apache.rocketmq.store;
 import java.util.concurrent.atomic.AtomicLong;
 
 public abstract class ReferenceResource {
-    protected final AtomicLong refCount = new AtomicLong(1);
-    protected volatile boolean available = true;
+    protected final AtomicLong refCount = new AtomicLong(1);// 默认1
+    protected volatile boolean available = true;// 默认true，SHUTDOWN变false
     protected volatile boolean cleanupOver = false;
     private volatile long firstShutdownTimestamp = 0;
 
+    // 同步方法（但只能串行hold，release可以并发执行）
     public synchronized boolean hold() {
+        // 当前true
         if (this.isAvailable()) {
+            // 执行refCount+1
+            // 原来refCount>0,返回true
             if (this.refCount.getAndIncrement() > 0) {
                 return true;
             } else {
+                // 原来refCount = 0（当前1？） -1返回false -》大概就是当前资源不能使用，所以原来是0就false
                 this.refCount.getAndDecrement();
             }
         }
@@ -42,7 +47,7 @@ public abstract class ReferenceResource {
 
     public void shutdown(final long intervalForcibly) {
         if (this.available) {
-            this.available = false;
+            this.available = false; //
             this.firstShutdownTimestamp = System.currentTimeMillis();
             this.release();
         } else if (this.getRefCount() > 0) {
@@ -54,10 +59,12 @@ public abstract class ReferenceResource {
     }
 
     public void release() {
+        // refCount-1
         long value = this.refCount.decrementAndGet();
+        // 原来就大于0，返回
         if (value > 0)
             return;
-
+        // 原来=0（当前-1？），执行cleanup
         synchronized (this) {
 
             this.cleanupOver = this.cleanup(value);

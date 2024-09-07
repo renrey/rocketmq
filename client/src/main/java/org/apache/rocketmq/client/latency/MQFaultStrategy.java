@@ -137,7 +137,8 @@ public class MQFaultStrategy {
     public MessageQueue selectOneMessageQueue(final TopicPublishInfo tpInfo, final String lastBrokerName, final boolean resetIndex) {
         BrokerFilter brokerFilter = threadBrokerFilter.get();
         brokerFilter.setLastBrokerName(lastBrokerName);
-        if (this.sendLatencyFaultEnable) {
+        // 默认false
+        if (this.sendLatencyFaultEnable) {// 应该是根据延时选？
             if (resetIndex) {
                 tpInfo.resetIndex();
             }
@@ -154,10 +155,14 @@ public class MQFaultStrategy {
             return tpInfo.selectOneMessageQueue();
         }
 
+        // 有filter
+        // 选择queue -》同一个线程下，轮询
         MessageQueue mq = tpInfo.selectOneMessageQueue(brokerFilter);
         if (mq != null) {
             return mq;
         }
+        // 无filter
+        // 选择queue -》同一个线程下，轮询
         return tpInfo.selectOneMessageQueue();
     }
 

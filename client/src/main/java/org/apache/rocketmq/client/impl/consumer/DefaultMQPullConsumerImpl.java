@@ -250,6 +250,11 @@ public class DefaultMQPullConsumerImpl implements MQConsumerInner {
         long timeoutMillis = block ? this.defaultMQPullConsumer.getConsumerTimeoutMillisWhenSuspend() : timeout;
 
         boolean isTagType = ExpressionType.isTagType(subscriptionData.getExpressionType());
+
+        /**
+         * 执行拉取
+         * 从当前queue对应的broker集群选择broker，然后发起pull请求
+         */
         PullResult pullResult = this.pullAPIWrapper.pullKernelImpl(
             mq,
             subscriptionData.getSubString(),
@@ -264,9 +269,14 @@ public class DefaultMQPullConsumerImpl implements MQConsumerInner {
             CommunicationMode.SYNC,
             null
         );
+        /**
+         * 解析pull响应
+         */
         this.pullAPIWrapper.processPullResult(mq, pullResult, subscriptionData);
         //If namespace is not null , reset Topic without namespace.
         this.resetTopic(pullResult.getMsgFoundList());
+
+        // 消费后的构子执行
         if (!this.consumeMessageHookList.isEmpty()) {
             ConsumeMessageContext consumeMessageContext = null;
             consumeMessageContext = new ConsumeMessageContext();
@@ -663,11 +673,12 @@ public class DefaultMQPullConsumerImpl implements MQConsumerInner {
 
     public synchronized void start() throws MQClientException {
         switch (this.serviceState) {
-            case CREATE_JUST:
+            case CREATE_JUST:// 初始启动
                 this.serviceState = ServiceState.START_FAILED;
 
                 this.checkConfig();
 
+                // 生成对每个topic订阅对象放入rebalanceImpl
                 this.copySubscription();
 
                 if (this.defaultMQPullConsumer.getMessageModel() == MessageModel.CLUSTERING) {
@@ -678,6 +689,7 @@ public class DefaultMQPullConsumerImpl implements MQConsumerInner {
 
                 this.rebalanceImpl.setConsumerGroup(this.defaultMQPullConsumer.getConsumerGroup());
                 this.rebalanceImpl.setMessageModel(this.defaultMQPullConsumer.getMessageModel());
+                // 生成分配
                 this.rebalanceImpl.setAllocateMessageQueueStrategy(this.defaultMQPullConsumer.getAllocateMessageQueueStrategy());
                 this.rebalanceImpl.setmQClientFactory(this.mQClientFactory);
 
@@ -690,10 +702,11 @@ public class DefaultMQPullConsumerImpl implements MQConsumerInner {
                     this.offsetStore = this.defaultMQPullConsumer.getOffsetStore();
                 } else {
                     switch (this.defaultMQPullConsumer.getMessageModel()) {
-                        case BROADCASTING:
+                        case BROADCASTING:// 广播模式
                             this.offsetStore = new LocalFileOffsetStore(this.mQClientFactory, this.defaultMQPullConsumer.getConsumerGroup());
                             break;
                         case CLUSTERING:
+                            // 默认集群模式
                             this.offsetStore = new RemoteBrokerOffsetStore(this.mQClientFactory, this.defaultMQPullConsumer.getConsumerGroup());
                             break;
                         default:
@@ -702,19 +715,23 @@ public class DefaultMQPullConsumerImpl implements MQConsumerInner {
                     this.defaultMQPullConsumer.setOffsetStore(this.offsetStore);
                 }
 
+                // 加载offset，实际只有广播 LocalFileOffsetStore才有操作，从本地那offset
                 this.offsetStore.load();
 
+
+                // 注册当前到 当前进程的通用mQClientFactory中， consumerTable中映射 当前消费组到这个实例
                 boolean registerOK = mQClientFactory.registerConsumer(this.defaultMQPullConsumer.getConsumerGroup(), this);
                 if (!registerOK) {
                     this.serviceState = ServiceState.CREATE_JUST;
-
+                    // 1个进程对同1个group只能有1个实例
                     throw new MQClientException("The consumer group[" + this.defaultMQPullConsumer.getConsumerGroup()
                         + "] has been created before, specify another name please." + FAQUrl.suggestTodo(FAQUrl.GROUP_NAME_DUPLICATE_URL),
                         null);
                 }
 
+                // 核心启动 -》启动全局工厂（即当前进程下，mq相关组件启动，别的实例可直接复用）
                 mQClientFactory.start();
-                log.info("the consumer [{}] start OK", this.defaultMQPullConsumer.getConsumerGroup());
+                log.info("the consumer [{}] start OK", this.defaultMQPullConsumer.getConsumerGroup());// 完成成功
                 this.serviceState = ServiceState.RUNNING;
                 break;
             case RUNNING:
@@ -779,11 +796,12 @@ public class DefaultMQPullConsumerImpl implements MQConsumerInner {
 
     private void copySubscription() throws MQClientException {
         try {
+            // 配置的topic
             Set<String> registerTopics = this.defaultMQPullConsumer.getRegisterTopics();
             if (registerTopics != null) {
                 for (final String topic : registerTopics) {
                     SubscriptionData subscriptionData = FilterAPI.buildSubscriptionData(topic, SubscriptionData.SUB_ALL);
-                    this.rebalanceImpl.getSubscriptionInner().put(topic, subscriptionData);
+                    this.rebalanceImpl.getSubscriptionInner().put(topic, subscriptionData);// 对每个topic的订阅信息放入
                 }
             }
         } catch (Exception e) {

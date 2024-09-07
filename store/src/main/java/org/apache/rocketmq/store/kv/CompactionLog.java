@@ -391,6 +391,7 @@ public class CompactionLog {
         try {
             long beginTime = System.nanoTime();
 
+            // 满了创建新文件
             if (tpLog.isEmptyOrCurrentFileFull()) {
                 try {
                     tpLog.roll();
@@ -403,11 +404,12 @@ public class CompactionLog {
             MappedFile mappedFile = tpLog.getLog().getLastMappedFile();
 
             CompactionAppendMsgCallback callback = new CompactionAppendMessageCallback(topic, queueId, tagsCode, storeTimestamp, tpLog.getCQ());
+            // 通过callback执行追加写，把消息追加写到文件
             AppendMessageResult result = mappedFile.appendMessage(msgBuffer, callback);
 
             switch (result.getStatus()) {
                 case PUT_OK:
-                    break;
+                    break;// 成功
                 case END_OF_FILE:
                     try {
                         tpLog.roll();
@@ -863,15 +865,18 @@ public class CompactionLog {
             }
 
             //get logic offset and physical offset
-            int logicOffsetPos = 4 + 4 + 4 + 4 + 4;
+            int logicOffsetPos = 4 + 4 + 4 + 4 + 4;// 逻辑下标的保存位置
             long logicOffset = bbSrc.getLong(logicOffsetPos);
             int destPos = bbDest.position();
+            // 计算压缩文件全局offset（非当前文件下的）
             long physicalOffset = fileFromOffset + bbDest.position();
             bbSrc.rewind();
             bbSrc.limit(msgLen);
-            bbDest.put(bbSrc);
+            bbDest.put(bbSrc);// 写入数据
+            // 替换上面为全局下标
             bbDest.putLong(destPos + logicOffsetPos + 8, physicalOffset);       //replace physical offset
 
+            // 新增稀疏索引
             boolean result = bcq.putBatchMessagePositionInfo(physicalOffset, msgLen,
                 tagsCode, storeTimestamp, logicOffset, (short)1);
             if (!result) {
@@ -997,8 +1002,10 @@ public class CompactionLog {
                     compactionLog.compactionCqFilePath, compactionLog.compactionCqMappedFileSize,
                     compactionLog.defaultMessageStore);
             } else {
+                //
                 mappedFileQueue = new MappedFileQueue(compactionLog.compactionLogFilePath + File.separator + subFolder,
                     compactionLog.compactionLogMappedFileSize, null);
+                // 稀疏cq:
                 consumeQueue = new SparseConsumeQueue(compactionLog.topic, compactionLog.queueId,
                     compactionLog.compactionCqFilePath, compactionLog.compactionCqMappedFileSize,
                     compactionLog.defaultMessageStore, subFolder);

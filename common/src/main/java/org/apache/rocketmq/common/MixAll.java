@@ -138,6 +138,7 @@ public class MixAll {
     public static String getWSAddr() {
         String wsDomainName = System.getProperty("rocketmq.namesrv.domain", DEFAULT_NAMESRV_ADDR_LOOKUP);
         String wsDomainSubgroup = System.getProperty("rocketmq.namesrv.domain.subgroup", "nsaddr");
+        // 地址：/rocketmq/nsaddr
         String wsAddr = "http://" + wsDomainName + ":8080/rocketmq/" + wsDomainSubgroup;
         if (wsDomainName.indexOf(":") > 0) {
             wsAddr = "http://" + wsDomainName + "/rocketmq/" + wsDomainSubgroup;

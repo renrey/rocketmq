@@ -298,16 +298,20 @@ public class MappedFileQueue implements Swappable {
 
     public MappedFile getLastMappedFile(final long startOffset, boolean needCreate) {
         long createOffset = -1;
+        // 获取最后一个文件
         MappedFile mappedFileLast = getLastMappedFile();
 
+        // 无文件了，生成文件序号-》
         if (mappedFileLast == null) {
             createOffset = startOffset - (startOffset % this.mappedFileSize);
         }
 
+        // 最后一个文件已满，生成下标-》上1个文件的offset +默认文件大小
         if (mappedFileLast != null && mappedFileLast.isFull()) {
             createOffset = mappedFileLast.getFileFromOffset() + this.mappedFileSize;
         }
 
+        // 创建文件
         if (createOffset != -1 && needCreate) {
             return tryCreateMappedFile(createOffset);
         }
@@ -342,9 +346,11 @@ public class MappedFileQueue implements Swappable {
     }
 
     public MappedFile tryCreateMappedFile(long createOffset) {
+        // 文件名: 20位offset
         String nextFilePath = this.storePath + File.separator + UtilAll.offset2FileName(createOffset);
         String nextNextFilePath = this.storePath + File.separator + UtilAll.offset2FileName(createOffset
                 + this.mappedFileSize);
+        // 创建文件，并进行mmap
         return doCreateMappedFile(nextFilePath, nextNextFilePath);
     }
 
@@ -352,9 +358,12 @@ public class MappedFileQueue implements Swappable {
         MappedFile mappedFile = null;
 
         if (this.allocateMappedFileService != null) {
+            // 需要异步allocateMappedFileService执行的
+            // 提交
             mappedFile = this.allocateMappedFileService.putRequestAndReturnMappedFile(nextFilePath,
                     nextNextFilePath, this.mappedFileSize);
         } else {
+            // 直接mmap映射
             try {
                 mappedFile = new DefaultMappedFile(nextFilePath, this.mappedFileSize);
             } catch (IOException e) {
@@ -366,10 +375,10 @@ public class MappedFileQueue implements Swappable {
             if (this.mappedFiles.isEmpty()) {
                 mappedFile.setFirstCreateInQueue(true);
             }
-            this.mappedFiles.add(mappedFile);
+            this.mappedFiles.add(mappedFile);// 加入到文件队列
         }
 
-        return mappedFile;
+        return mappedFile;// 返回mmap后的fd
     }
 
     public MappedFile getLastMappedFile(final long startOffset) {
@@ -616,13 +625,17 @@ public class MappedFileQueue implements Swappable {
 
     public boolean flush(final int flushLeastPages) {
         boolean result = true;
+        // 通过逻辑offset找文件
         MappedFile mappedFile = this.findMappedFileByOffset(this.getFlushedWhere(), this.getFlushedWhere() == 0);
         if (mappedFile != null) {
             long tmpTimeStamp = mappedFile.getStoreTimestamp();
-            int offset = mappedFile.flush(flushLeastPages);
-            long where = mappedFile.getFileFromOffset() + offset;
+            int offset = mappedFile.flush(flushLeastPages);// 文件fsync，有flushLeastPages大小的页变动才执行
+            long where = mappedFile.getFileFromOffset() + offset;// 当前文件开始offset+本次写入的位置
             result = where == this.getFlushedWhere();
+
+            // 更新下次flush开始逻辑offset
             this.setFlushedWhere(where);
+            // 如果没要求，需要记录时间
             if (0 == flushLeastPages) {
                 this.setStoreTimestamp(tmpTimeStamp);
             }
@@ -664,6 +677,7 @@ public class MappedFileQueue implements Swappable {
                         this.mappedFileSize,
                         this.mappedFiles.size());
                 } else {
+                    // 逻辑应有文件数-当前第1个文件前的文件数-》文件的偏移量 -》对应offset在当前已有文件的顺序
                     int index = (int) ((offset / this.mappedFileSize) - (firstMappedFile.getFileFromOffset() / this.mappedFileSize));
                     MappedFile targetFile = null;
                     try {
@@ -684,6 +698,7 @@ public class MappedFileQueue implements Swappable {
                     }
                 }
 
+                // 没找到对应offset所在文件，返回第一个文件
                 if (returnFirstOnNotFound) {
                     return firstMappedFile;
                 }

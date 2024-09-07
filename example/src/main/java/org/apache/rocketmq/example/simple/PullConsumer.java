@@ -36,7 +36,7 @@ import org.apache.rocketmq.remoting.exception.RemotingException;
 public class PullConsumer {
 
     public static void main(String[] args) throws MQClientException {
-
+        // 主动拉取
         DefaultMQPullConsumer consumer = new DefaultMQPullConsumer("please_rename_unique_group_name_5");
         consumer.setNamesrvAddr("127.0.0.1:9876");
         Set<String> topics = new HashSet<>();
@@ -59,6 +59,7 @@ public class PullConsumer {
                 public void run() {
                     while (true) {
                         try {
+                            // 获取本地的分配到的queue
                             Set<MessageQueue> messageQueues = consumer.fetchMessageQueuesInBalance(topic);
                             if (messageQueues == null || messageQueues.isEmpty()) {
                                 Thread.sleep(1000);
@@ -67,7 +68,9 @@ public class PullConsumer {
                             PullResult pullResult = null;
                             for (MessageQueue messageQueue : messageQueues) {
                                 try {
+                                    // 获取最后消费offset
                                     long offset = this.consumeFromOffset(messageQueue);
+                                    // 1. 同步拉取消息
                                     pullResult = consumer.pull(messageQueue, "*", offset, 32);
                                     switch (pullResult.getPullStatus()) {
                                         case FOUND:
@@ -75,6 +78,7 @@ public class PullConsumer {
 
                                             if (msgs != null && !msgs.isEmpty()) {
                                                 this.doSomething(msgs);
+                                                // 更新offset
                                                 //update offset to broker
                                                 consumer.updateConsumeOffset(messageQueue, pullResult.getNextBeginOffset());
                                                 //print pull tps
@@ -115,6 +119,7 @@ public class PullConsumer {
                 public long consumeFromOffset(MessageQueue messageQueue) throws MQClientException {
                     //-1 when started
                     long offset = consumer.getOffsetStore().readOffset(messageQueue, ReadOffsetType.READ_FROM_MEMORY);
+                    // 本地内存没有，查询broker
                     if (offset < 0) {
                         //query from broker
                         offset = consumer.getOffsetStore().readOffset(messageQueue, ReadOffsetType.READ_FROM_STORE);

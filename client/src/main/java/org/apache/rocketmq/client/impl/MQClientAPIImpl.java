@@ -248,6 +248,7 @@ public class MQClientAPIImpl implements NameServerUpdateCallback {
         final ClientRemotingProcessor clientRemotingProcessor,
         RPCHook rpcHook, final ClientConfig clientConfig) {
         this.clientConfig = clientConfig;
+        // api地址：ip/rocketmq/nsaddr
         topAddressing = new DefaultTopAddressing(MixAll.getWSAddr(), clientConfig.getUnitName());
         topAddressing.registerChangeCallBack(this);
         this.remotingClient = new NettyRemotingClient(nettyClientConfig, null);
@@ -284,6 +285,7 @@ public class MQClientAPIImpl implements NameServerUpdateCallback {
 
     public String fetchNameServerAddr() {
         try {
+            // 从默认地址发送/rocketmq/nsaddr请求到配置rocketmq.namesrv.domain的服务器，获取详细namesrv（多条地址）
             String addrs = this.topAddressing.fetchNSAddr();
             if (!UtilAll.isBlank(addrs)) {
                 if (!addrs.equals(this.nameSrvAddr)) {
@@ -313,7 +315,7 @@ public class MQClientAPIImpl implements NameServerUpdateCallback {
     }
 
     public void updateNameServerAddressList(final String addrs) {
-        String[] addrArray = addrs.split(";");
+        String[] addrArray = addrs.split(";");// 多个url拆分
         List<String> list = Arrays.asList(addrArray);
         this.remotingClient.updateNameServerAddressList(list);
     }
@@ -588,19 +590,21 @@ public class MQClientAPIImpl implements NameServerUpdateCallback {
         request.setBody(msg.getBody());
 
         switch (communicationMode) {
-            case ONEWAY:
+            case ONEWAY:// oneway 提交一下，无重试
                 this.remotingClient.invokeOneway(addr, request, timeoutMillis);
                 return null;
-            case ASYNC:
+            case ASYNC:// 异步
                 final AtomicInteger times = new AtomicInteger();
                 long costTimeAsync = System.currentTimeMillis() - beginStartTime;
                 if (timeoutMillis < costTimeAsync) {
                     throw new RemotingTooMuchRequestException("sendMessage call timeout");
                 }
+                // 提交异步请求
                 this.sendMessageAsync(addr, brokerName, msg, timeoutMillis - costTimeAsync, request, sendCallback, topicPublishInfo, instance,
                     retryTimesWhenSendFailed, times, context, producer);
+                // 直接返回空
                 return null;
-            case SYNC:
+            case SYNC:// 同步
                 long costTimeSync = System.currentTimeMillis() - beginStartTime;
                 if (timeoutMillis < costTimeSync) {
                     throw new RemotingTooMuchRequestException("sendMessage call timeout");
@@ -840,9 +844,11 @@ public class MQClientAPIImpl implements NameServerUpdateCallback {
                 assert false;
                 return null;
             case ASYNC:
+                // 异步执行
                 this.pullMessageAsync(addr, request, timeoutMillis, pullCallback);
                 return null;
             case SYNC:
+                // 同步拉取
                 return this.pullMessageSync(addr, request, timeoutMillis);
             default:
                 assert false;
@@ -1072,6 +1078,7 @@ public class MQClientAPIImpl implements NameServerUpdateCallback {
         final RemotingCommand request,
         final long timeoutMillis
     ) throws RemotingException, InterruptedException, MQBrokerException {
+        // 同步调用请求，所以当前实例不会同时拉取其他
         RemotingCommand response = this.remotingClient.invokeSync(addr, request, timeoutMillis);
         assert response != null;
         return this.processPullResponse(response, addr);

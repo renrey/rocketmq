@@ -63,6 +63,7 @@ public class DefaultMQPullConsumer extends ClientConfig implements MQPullConsume
     private long consumerPullTimeoutMillis = 1000 * 10;
     /**
      * Consumption pattern,default is clustering
+     * 2种模式：广播、集群
      */
     private MessageModel messageModel = MessageModel.CLUSTERING;
     /**
@@ -296,7 +297,9 @@ public class DefaultMQPullConsumer extends ClientConfig implements MQPullConsume
 
     @Override
     public void start() throws MQClientException {
+        // namespace兼容
         this.setConsumerGroup(NamespaceUtil.wrapNamespace(this.getNamespace(), this.consumerGroup));
+        // 核心启动
         this.defaultMQPullConsumerImpl.start();
     }
 

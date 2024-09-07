@@ -28,7 +28,7 @@ import org.apache.rocketmq.remoting.protocol.route.TopicRouteData;
 public class TopicPublishInfo {
     private boolean orderTopic = false;
     private boolean haveTopicRouterInfo = false;
-    private List<MessageQueue> messageQueueList = new ArrayList<>();
+    private List<MessageQueue> messageQueueList = new ArrayList<>();// topic下的队列
     private volatile ThreadLocalIndex sendWhichQueue = new ThreadLocalIndex();
     private TopicRouteData topicRouteData;
 
@@ -83,13 +83,16 @@ public class TopicPublishInfo {
 
         if (filter != null && filter.length != 0) {
             for (int i = 0; i < messageQueueList.size(); i++) {
+                // 轮询
                 int index = Math.abs(sendQueue.incrementAndGet() % messageQueueList.size());
                 MessageQueue mq = messageQueueList.get(index);
                 boolean filterResult = true;
+                // 对当前queue执行filter
                 for (QueueFilter f: filter) {
                     Preconditions.checkNotNull(f);
                     filterResult &= f.filter(mq);
                 }
+                // 当前queue 符合所有filter
                 if (filterResult) {
                     return mq;
                 }
@@ -98,6 +101,8 @@ public class TopicPublishInfo {
             return null;
         }
 
+        // index+1，选下一个，除非不同线程发送
+        // 每个线程第一次都是选第1个，然后下一个，-》轮询
         int index = Math.abs(sendQueue.incrementAndGet() % messageQueueList.size());
         return messageQueueList.get(index);
     }

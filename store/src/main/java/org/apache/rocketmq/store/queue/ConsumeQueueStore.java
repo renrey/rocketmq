@@ -270,7 +270,9 @@ public class ConsumeQueueStore {
     }
 
     public boolean flush(ConsumeQueueInterface consumeQueue, int flushLeastPages) {
+        // 实际对应queue的cq
         FileQueueLifeCycle fileQueueLifeCycle = getLifeCycle(consumeQueue.getTopic(), consumeQueue.getQueueId());
+        // 执行！！！
         return fileQueueLifeCycle.flush(flushLeastPages);
     }
 
@@ -315,8 +317,9 @@ public class ConsumeQueueStore {
     }
 
     private ConsumeQueueInterface doFindOrCreateConsumeQueue(String topic, int queueId) {
+        // 根据topic获取
         ConcurrentMap<Integer, ConsumeQueueInterface> map = consumeQueueTable.get(topic);
-        if (null == map) {
+        if (null == map) {// 没有则新增
             ConcurrentMap<Integer, ConsumeQueueInterface> newMap = new ConcurrentHashMap<>(128);
             ConcurrentMap<Integer, ConsumeQueueInterface> oldMap = consumeQueueTable.putIfAbsent(topic, newMap);
             if (oldMap != null) {
@@ -326,16 +329,20 @@ public class ConsumeQueueStore {
             }
         }
 
+        // 获取对应queue的
         ConsumeQueueInterface logic = map.get(queueId);
         if (logic != null) {
-            return logic;
+            return logic;// 已存在，返回
         }
 
-        ConsumeQueueInterface newLogic;
+        // 未有对应的queue的，生成ConsumeQueue对象
 
+        ConsumeQueueInterface newLogic;
+        // 获取topic配置
         Optional<TopicConfig> topicConfig = this.messageStore.getTopicConfig(topic);
         // TODO maybe the topic has been deleted.
         if (Objects.equals(CQType.BatchCQ, QueueTypeUtils.getCQType(topicConfig))) {
+            // 批消息
             newLogic = new BatchConsumeQueue(
                 topic,
                 queueId,
@@ -343,11 +350,12 @@ public class ConsumeQueueStore {
                 this.messageStoreConfig.getMapperFileSizeBatchConsumeQueue(),
                 this.messageStore);
         } else {
+            // 单条消息：ConsumeQueue
             newLogic = new ConsumeQueue(
                 topic,
                 queueId,
-                getStorePathConsumeQueue(this.messageStoreConfig.getStorePathRootDir()),
-                this.messageStoreConfig.getMappedFileSizeConsumeQueue(),
+                getStorePathConsumeQueue(this.messageStoreConfig.getStorePathRootDir()),// consumequeue文件
+                this.messageStoreConfig.getMappedFileSizeConsumeQueue(),// 文件大小
                 this.messageStore);
         }
 
@@ -379,7 +387,9 @@ public class ConsumeQueueStore {
     }
 
     public void assignQueueOffset(MessageExtBrokerInner msg) {
+        // 1. 获取（未有则创建）当前queue的 cq文件
         ConsumeQueueInterface consumeQueue = findOrCreateConsumeQueue(msg.getTopic(), msg.getQueueId());
+        // 2. 申请当前消息的offset
         consumeQueue.assignQueueOffset(this.queueOffsetOperator, msg);
     }
 

@@ -59,10 +59,13 @@ public class ConsumerManageProcessor implements NettyRequestProcessor {
     public RemotingCommand processRequest(ChannelHandlerContext ctx, RemotingCommand request)
         throws RemotingCommandException {
         switch (request.getCode()) {
+            // 获取group的消费者list
             case RequestCode.GET_CONSUMER_LIST_BY_GROUP:
                 return this.getConsumerListByGroup(ctx, request);
+            // 更新消费者的offset
             case RequestCode.UPDATE_CONSUMER_OFFSET:
                 return this.updateConsumerOffset(ctx, request);
+            // 查询消费者的offset
             case RequestCode.QUERY_CONSUMER_OFFSET:
                 return this.queryConsumerOffset(ctx, request);
             default:
@@ -84,12 +87,16 @@ public class ConsumerManageProcessor implements NettyRequestProcessor {
             (GetConsumerListByGroupRequestHeader) request
                 .decodeCommandCustomHeader(GetConsumerListByGroupRequestHeader.class);
 
+        // （从consumerTable）获取当前group的对象
         ConsumerGroupInfo consumerGroupInfo =
             this.brokerController.getConsumerManager().getConsumerGroupInfo(
                 requestHeader.getConsumerGroup());
         if (consumerGroupInfo != null) {
-            List<String> clientIds = consumerGroupInfo.getAllClientId();
+            // 当前group注册过
+
+            List<String> clientIds = consumerGroupInfo.getAllClientId();// group下所有消费者客户端
             if (!clientIds.isEmpty()) {
+                // 不空，直接返回所有id
                 GetConsumerListByGroupResponseBody body = new GetConsumerListByGroupResponseBody();
                 body.setConsumerIdList(clientIds);
                 response.setBody(body.encode());
@@ -97,10 +104,12 @@ public class ConsumerManageProcessor implements NettyRequestProcessor {
                 response.setRemark(null);
                 return response;
             } else {
+                // 无消费者id返回
                 LOGGER.warn("getAllClientId failed, {} {}", requestHeader.getConsumerGroup(),
                     RemotingHelper.parseChannelRemoteAddr(ctx.channel()));
             }
         } else {
+            // 未找到这个group信息
             LOGGER.warn("getConsumerGroupInfo failed, {} {}", requestHeader.getConsumerGroup(),
                 RemotingHelper.parseChannelRemoteAddr(ctx.channel()));
         }
@@ -159,11 +168,13 @@ public class ConsumerManageProcessor implements NettyRequestProcessor {
             return rewriteResult;
         }
 
+        // 从请求中获取这些数据
         String topic = requestHeader.getTopic();
         String group = requestHeader.getConsumerGroup();
         Integer queueId = requestHeader.getQueueId();
         Long offset = requestHeader.getCommitOffset();
 
+        // 验证当前 broker中是有这个topic -》简单本地存储的话就是topicConfigTable是否有这个topic
         if (!this.brokerController.getTopicConfigManager().containsTopic(requestHeader.getTopic())) {
             response.setCode(ResponseCode.TOPIC_NOT_EXIST);
             response.setRemark("Topic " + topic + " not exist!");
@@ -183,8 +194,11 @@ public class ConsumerManageProcessor implements NettyRequestProcessor {
         }
 
         ConsumerOffsetManager consumerOffsetManager = brokerController.getConsumerOffsetManager();
+
+        // 开启了支持服务端重置offset
         if (this.brokerController.getBrokerConfig().isUseServerSideResetOffset()) {
             // Note, ignoring this update offset request
+            // 当前组发起过对这个queue reset，不提交
             if (consumerOffsetManager.hasOffsetReset(topic, group, queueId)) {
                 response.setCode(ResponseCode.SUCCESS);
                 response.setRemark("Offset has been previously reset");
@@ -194,6 +208,8 @@ public class ConsumerManageProcessor implements NettyRequestProcessor {
             }
         }
 
+        // 执行提交offset！！！，需要传入客户端的地址
+        // 其实就是找打topic与group的一个map，里面存了当前group消费每个queue的offset
         this.brokerController.getConsumerOffsetManager().commitOffset(
             RemotingHelper.parseChannelRemoteAddr(ctx.channel()), group, topic, queueId, offset);
         response.setCode(ResponseCode.SUCCESS);
@@ -312,6 +328,7 @@ public class ConsumerManageProcessor implements NettyRequestProcessor {
             return rewriteResult;
         }
 
+        // 通过ConsumerOffsetManager查询offset，是查整个group在目标topic queue的offset
         long offset =
             this.brokerController.getConsumerOffsetManager().queryOffset(
                 requestHeader.getConsumerGroup(), requestHeader.getTopic(), requestHeader.getQueueId());

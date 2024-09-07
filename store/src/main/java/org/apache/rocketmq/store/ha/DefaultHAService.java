@@ -123,6 +123,7 @@ public class DefaultHAService implements HAService {
 
     @Override
     public void start() throws Exception {
+        // 监听端口，等待slave发起
         this.acceptSocketService.beginAccept();
         this.acceptSocketService.start();
         this.groupTransferService.start();

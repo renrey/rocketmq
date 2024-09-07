@@ -53,6 +53,7 @@ public class LocalFileOffsetStore implements OffsetStore {
     public LocalFileOffsetStore(MQClientInstance mQClientFactory, String groupName) {
         this.mQClientFactory = mQClientFactory;
         this.groupName = groupName;
+        // 本地offset文件：指定目录/clientId/group名/offsets.json
         this.storePath = LOCAL_OFFSET_STORE_DIR + File.separator +
             this.mQClientFactory.getClientId() + File.separator +
             this.groupName + File.separator +
@@ -184,13 +185,15 @@ public class LocalFileOffsetStore implements OffsetStore {
     private OffsetSerializeWrapper readLocalOffset() throws MQClientException {
         String content = null;
         try {
-            content = MixAll.file2String(this.storePath);
+            content = MixAll.file2String(this.storePath);// 读取offset.json文件
         } catch (IOException e) {
             log.warn("Load local offset store file exception", e);
         }
         if (null == content || content.length() == 0) {
+            // 无内容，读取bak备份，就是后缀多.bak
             return this.readLocalOffsetBak();
         } else {
+            // 有内容，解析json
             OffsetSerializeWrapper offsetSerializeWrapper = null;
             try {
                 offsetSerializeWrapper =

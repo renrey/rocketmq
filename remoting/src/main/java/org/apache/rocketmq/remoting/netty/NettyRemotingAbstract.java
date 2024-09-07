@@ -254,11 +254,12 @@ public abstract class NettyRemotingAbstract {
             final RemotingCommand response =
                 RemotingCommand.createResponseCommand(RemotingSysResponseCode.REQUEST_CODE_NOT_SUPPORTED, error);
             response.setOpaque(opaque);
-            writeResponse(ctx.channel(), cmd, response);
+            writeResponse(ctx.channel(), cmd, response);// 直接写入响应
             log.error(RemotingHelper.parseChannelRemoteAddr(ctx.channel()) + error);
             return;
         }
 
+        // 保证业务处理
         Runnable run = buildProcessRequestHandler(ctx, cmd, pair, opaque);
 
         if (pair.getObject1().rejectRequest()) {
@@ -272,6 +273,8 @@ public abstract class NettyRemotingAbstract {
         try {
             final RequestTask requestTask = new RequestTask(run, ctx.channel(), cmd);
             //async execute task, current thread return directly
+
+            // 提交任务到线程池，异步执行，当前netty事件完成
             pair.getObject2().submit(requestTask);
         } catch (RejectedExecutionException e) {
             if ((System.currentTimeMillis() % 10000) == 0) {
@@ -508,8 +511,11 @@ public abstract class NettyRemotingAbstract {
         throws InterruptedException, RemotingTooMuchRequestException, RemotingTimeoutException, RemotingSendRequestException {
         long beginStartTime = System.currentTimeMillis();
         final int opaque = request.getOpaque();
+
+        // 即获取执行资源，默认并行65535
         boolean acquired = this.semaphoreAsync.tryAcquire(timeoutMillis, TimeUnit.MILLISECONDS);
         if (acquired) {
+            // 获取资源可以执行
             final SemaphoreReleaseOnlyOnce once = new SemaphoreReleaseOnlyOnce(this.semaphoreAsync);
             long costTime = System.currentTimeMillis() - beginStartTime;
             if (timeoutMillis < costTime) {
@@ -518,8 +524,9 @@ public abstract class NettyRemotingAbstract {
             }
 
             final ResponseFuture responseFuture = new ResponseFuture(channel, opaque, timeoutMillis - costTime, invokeCallback, once);
-            this.responseTable.put(opaque, responseFuture);
+            this.responseTable.put(opaque, responseFuture);// 保存futue
             try {
+                // 对channel发起（提交） 请求，绑定处理回调函数
                 channel.writeAndFlush(request).addListener((ChannelFutureListener) f -> {
                     if (f.isSuccess()) {
                         responseFuture.setSendRequestOK(true);

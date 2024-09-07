@@ -112,7 +112,7 @@ public class PullMessageProcessor implements NettyRequestProcessor {
                 //Otherwise, we could just transfer it to the physical process
             }
             //below are physical info
-            String bname = mappingItem.getBname();
+            String bname = mappingItem.getBname();// 目标broker名
             Integer phyQueueId = mappingItem.getQueueId();
             Long phyQueueOffset = mappingItem.computePhysicalQueueOffset(globalOffset);
             requestHeader.setQueueId(phyQueueId);
@@ -133,7 +133,13 @@ public class PullMessageProcessor implements NettyRequestProcessor {
             sysFlag = PullSysFlag.clearSuspendFlag(sysFlag);
             sysFlag = PullSysFlag.clearCommitOffsetFlag(sysFlag);
             requestHeader.setSysFlag(sysFlag);
+            // 因为实际跟rpc一样需要转发寻址
+            // 生成rpc请求
             RpcRequest rpcRequest = new RpcRequest(RequestCode.PULL_MESSAGE, requestHeader, null);
+            // 执行请求
+            /**
+             * @see org.apache.rocketmq.broker.processor.DefaultPullMessageResultHandler#handle(org.apache.rocketmq.store.GetMessageResult, RemotingCommand, PullMessageRequestHeader, Channel, SubscriptionData, SubscriptionGroupConfig, boolean, org.apache.rocketmq.store.MessageFilter, RemotingCommand, TopicQueueMappingContext)
+             */
             RpcResponse rpcResponse = this.brokerController.getBrokerOuterAPI().getRpcClient().invoke(rpcRequest, this.brokerController.getBrokerConfig().getForwardTimeout()).get();
             if (rpcResponse.getException() != null) {
                 throw rpcResponse.getException();
@@ -298,6 +304,7 @@ public class PullMessageProcessor implements NettyRequestProcessor {
         return false;
     }
 
+    // 执行
     private RemotingCommand processRequest(final Channel channel, RemotingCommand request, boolean brokerAllowSuspend, boolean brokerAllowFlowCtrSuspend)
         throws RemotingCommandException {
         RemotingCommand response = RemotingCommand.createResponseCommand(PullMessageResponseHeader.class);
@@ -340,6 +347,7 @@ public class PullMessageProcessor implements NettyRequestProcessor {
             return response;
         }
 
+        // 获取topic元数据
         TopicConfig topicConfig = this.brokerController.getTopicConfigManager().selectTopicConfig(requestHeader.getTopic());
         if (null == topicConfig) {
             LOGGER.error("the topic {} not exist, consumer: {}", requestHeader.getTopic(), RemotingHelper.parseChannelRemoteAddr(channel));
@@ -354,6 +362,8 @@ public class PullMessageProcessor implements NettyRequestProcessor {
             response.setRemark("the topic[" + requestHeader.getTopic() + "] pulling message is forbidden");
             return response;
         }
+        // 上面是各种验证不通过
+
 
         TopicQueueMappingContext mappingContext = this.brokerController.getTopicQueueMappingManager().buildTopicQueueMappingContext(requestHeader, false);
 
@@ -477,6 +487,7 @@ public class PullMessageProcessor implements NettyRequestProcessor {
             return response;
         }
 
+        // 过滤器相关
         MessageFilter messageFilter;
         if (this.brokerController.getBrokerConfig().isFilterSupportRetry()) {
             messageFilter = new ExpressionForRetryMessageFilter(subscriptionData, consumerFilterData,
@@ -487,8 +498,10 @@ public class PullMessageProcessor implements NettyRequestProcessor {
         }
 
         final MessageStore messageStore = brokerController.getMessageStore();
+        // 默认存储 pull消息
         if (this.brokerController.getMessageStore() instanceof DefaultMessageStore) {
             DefaultMessageStore defaultMessageStore = (DefaultMessageStore)this.brokerController.getMessageStore();
+            // 冷数据 流控？
             boolean cgNeedColdDataFlowCtr = brokerController.getColdDataCgCtrService().isCgNeedColdDataFlowCtr(requestHeader.getConsumerGroup());
             if (cgNeedColdDataFlowCtr) {
                 boolean isMsgLogicCold = defaultMessageStore.getCommitLog()
@@ -513,38 +526,53 @@ public class PullMessageProcessor implements NettyRequestProcessor {
             }
         }
 
+        // 服务重置请求的offset ，默认关闭
         final boolean useResetOffsetFeature = brokerController.getBrokerConfig().isUseServerSideResetOffset();
         String topic = requestHeader.getTopic();
         String group = requestHeader.getConsumerGroup();
         int queueId = requestHeader.getQueueId();
+
+        // 查询消费者组在当前queue的消费offset -》重置的offset
         Long resetOffset = brokerController.getConsumerOffsetManager().queryThenEraseResetOffset(topic, group, queueId);
 
         GetMessageResult getMessageResult = null;
         if (useResetOffsetFeature && null != resetOffset) {
+            // 开启重置且有消费offset
             getMessageResult = new GetMessageResult();
-            getMessageResult.setStatus(GetMessageStatus.OFFSET_RESET);
+            getMessageResult.setStatus(GetMessageStatus.OFFSET_RESET);// 重置offset
             getMessageResult.setNextBeginOffset(resetOffset);
             getMessageResult.setMinOffset(messageStore.getMinOffsetInQueue(topic, queueId));
             getMessageResult.setMaxOffset(messageStore.getMaxOffsetInQueue(topic, queueId));
             getMessageResult.setSuggestPullingFromSlave(false);
         } else {
+            // 没开启 或者 没消费offset
+
+            // 广播
             long broadcastInitOffset = queryBroadcastPullInitOffset(topic, group, queueId, requestHeader, channel);
             if (broadcastInitOffset >= 0) {
                 getMessageResult = new GetMessageResult();
-                getMessageResult.setStatus(GetMessageStatus.OFFSET_RESET);
+                getMessageResult.setStatus(GetMessageStatus.OFFSET_RESET);// 重置offset
                 getMessageResult.setNextBeginOffset(broadcastInitOffset);
             } else {
+                // 普通进入这里
+
                 SubscriptionData finalSubscriptionData = subscriptionData;
                 RemotingCommand finalResponse = response;
+                /**
+                 * 执行pull消息 -》异步执行 ---
+                 * default的实际只是把结果放在future，还是同步
+                 */
                 messageStore.getMessageAsync(group, topic, queueId, requestHeader.getQueueOffset(),
                         requestHeader.getMaxMsgNums(), messageFilter)
                     .thenApply(result -> {
+                        // 执行完成后响应对象相关
                         if (null == result) {
                             finalResponse.setCode(ResponseCode.SYSTEM_ERROR);
                             finalResponse.setRemark("store getMessage return null");
                             return finalResponse;
                         }
                         brokerController.getColdDataCgCtrService().coldAcc(requestHeader.getConsumerGroup(), result.getColdDataSum());
+                        // 封装结果 -》提交netty的
                         return pullMessageResultHandler.handle(
                             result,
                             request,
@@ -558,12 +586,13 @@ public class PullMessageProcessor implements NettyRequestProcessor {
                             mappingContext
                         );
                     })
-                    .thenAccept(result -> NettyRemotingAbstract.writeResponse(channel, request, result));
+                    .thenAccept(result -> NettyRemotingAbstract.writeResponse(channel, request, result));// 最后定义把结果执行netty写响应
             }
         }
 
+        // 有获取结果
         if (getMessageResult != null) {
-
+            // 响应结果封装-》无消费消息返回
             return this.pullMessageResultHandler.handle(
                 getMessageResult,
                 request,
@@ -854,6 +883,7 @@ public class PullMessageProcessor implements NettyRequestProcessor {
     protected long queryBroadcastPullInitOffset(String topic, String group, int queueId,
         PullMessageRequestHeader requestHeader, Channel channel) {
 
+        // 默认开启，不进
         if (!this.brokerController.getBrokerConfig().isEnableBroadcastOffsetStore()) {
             return -1L;
         }
@@ -877,6 +907,7 @@ public class PullMessageProcessor implements NettyRequestProcessor {
             return this.brokerController.getBroadcastOffsetManager()
                 .queryInitOffset(topic, group, queueId, clientId, requestHeader.getQueueOffset(), proxyPullBroadcast);
         }
+        // 非广播返回-1
         return -1L;
     }
 }

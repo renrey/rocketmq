@@ -52,6 +52,7 @@ public abstract class RebalanceImpl {
     protected final ConcurrentMap<MessageQueue, ProcessQueue> processQueueTable = new ConcurrentHashMap<>(64);
     protected final ConcurrentMap<MessageQueue, PopProcessQueue> popProcessQueueTable = new ConcurrentHashMap<>(64);
 
+    // 每个topic，及其所有queue的信息
     protected final ConcurrentMap<String/* topic */, Set<MessageQueue>> topicSubscribeInfoTable =
         new ConcurrentHashMap<>();
     protected final ConcurrentMap<String /* topic */, SubscriptionData> subscriptionInner =
@@ -131,6 +132,7 @@ public abstract class RebalanceImpl {
     }
 
     private HashMap<String/* brokerName */, Set<MessageQueue>> buildProcessQueueTableByBrokerName() {
+        // key：broker集群名 v：用到这个集群的queue
         HashMap<String, Set<MessageQueue>> result = new HashMap<>();
 
         for (Map.Entry<MessageQueue, ProcessQueue> entry : this.processQueueTable.entrySet()) {
@@ -141,6 +143,7 @@ public abstract class RebalanceImpl {
                 continue;
             }
 
+            // 获取对应queue的broker集群名
             String destBrokerName = this.mQClientFactory.getBrokerNameFromMessageQueue(mq);
             Set<MessageQueue> mqs = result.get(destBrokerName);
             if (null == mqs) {
@@ -148,7 +151,7 @@ public abstract class RebalanceImpl {
                 result.put(mq.getBrokerName(), mqs);
             }
 
-            mqs.add(mq);
+            mqs.add(mq);// 把queue加入到当前broker集群名下
         }
 
         return result;
@@ -163,8 +166,10 @@ public abstract class RebalanceImpl {
             requestBody.getMqSet().add(mq);
 
             try {
+                // 锁当前queue，发送给对应broker
                 Set<MessageQueue> lockedMq =
                     this.mQClientFactory.getMQClientAPIImpl().lockBatchMQ(findBrokerResult.getBrokerAddr(), requestBody, 1000);
+                // lock成功的在本地保存
                 for (MessageQueue mmqq : lockedMq) {
                     ProcessQueue processQueue = this.processQueueTable.get(mmqq);
                     if (processQueue != null) {
@@ -186,17 +191,18 @@ public abstract class RebalanceImpl {
 
     public void lockAll() {
         HashMap<String, Set<MessageQueue>> brokerMqs = this.buildProcessQueueTableByBrokerName();
-
+        //  key：broker集群名 v：用到这个集群的queue
         Iterator<Entry<String, Set<MessageQueue>>> it = brokerMqs.entrySet().iterator();
         while (it.hasNext()) {
             Entry<String, Set<MessageQueue>> entry = it.next();
-            final String brokerName = entry.getKey();
-            final Set<MessageQueue> mqs = entry.getValue();
+            final String brokerName = entry.getKey();// key就是broker集群名
+            final Set<MessageQueue> mqs = entry.getValue();// 用到这个集群的queue
 
             if (mqs.isEmpty()) {
                 continue;
             }
 
+            // 获取目标broker集群的master地址
             FindBrokerResult findBrokerResult = this.mQClientFactory.findBrokerAddressInSubscribe(brokerName, MixAll.MASTER_ID, true);
             if (findBrokerResult != null) {
                 LockBatchRequestBody requestBody = new LockBatchRequestBody();
@@ -205,20 +211,21 @@ public abstract class RebalanceImpl {
                 requestBody.setMqSet(mqs);
 
                 try {
+                    // 向master 发送 lock请求（LOCK_BATCH_MQ）
                     Set<MessageQueue> lockOKMQSet =
                         this.mQClientFactory.getMQClientAPIImpl().lockBatchMQ(findBrokerResult.getBrokerAddr(), requestBody, 1000);
-
+                    // 返回的queue是已成功lock的
                     for (MessageQueue mq : mqs) {
                         ProcessQueue processQueue = this.processQueueTable.get(mq);
                         if (processQueue != null) {
                             if (lockOKMQSet.contains(mq)) {
-                                if (!processQueue.isLocked()) {
+                                if (!processQueue.isLocked()) {// 之前未被lock，打印说被lock
                                     log.info("the message queue locked OK, Group: {} {}", this.consumerGroup, mq);
                                 }
-                                processQueue.setLocked(true);
+                                processQueue.setLocked(true);// 更新已被lock
                                 processQueue.setLastLockTimestamp(System.currentTimeMillis());
                             } else {
-                                processQueue.setLocked(false);
+                                processQueue.setLocked(false);// 未lock成功
                                 log.warn("the message queue locked Failed, Group: {} {}", this.consumerGroup, mq);
                             }
                         }
@@ -236,14 +243,19 @@ public abstract class RebalanceImpl {
 
     public boolean doRebalance(final boolean isOrder) {
         boolean balanced = true;
+        // 当前消费实例 订阅的topic信息
         Map<String, SubscriptionData> subTable = this.getSubscriptionInner();
         if (subTable != null) {
             for (final Map.Entry<String, SubscriptionData> entry : subTable.entrySet()) {
                 final String topic = entry.getKey();
                 try {
+                    // pop、 广播、push先执行tryQueryAssignment查询
                     if (!clientRebalance(topic) && tryQueryAssignment(topic)) {
+                        // 有查到分配结果，
+                        // 会把分配到的queue 提交pull任务，开始拉群消息
                         balanced = this.getRebalanceResultFromBroker(topic, isOrder);
                     } else {
+                        // 正常pull
                         balanced = this.rebalanceByTopic(topic, isOrder);
                     }
                 } catch (Throwable e) {
@@ -261,32 +273,36 @@ public abstract class RebalanceImpl {
     }
 
     private boolean tryQueryAssignment(String topic) {
-        if (topicClientRebalance.containsKey(topic)) {
+        if (topicClientRebalance.containsKey(topic)) {// 已有代表，之前查询失败
             return false;
         }
 
-        if (topicBrokerRebalance.containsKey(topic)) {
+        if (topicBrokerRebalance.containsKey(topic)) {// 重复了成功
             return true;
         }
         String strategyName = allocateMessageQueueStrategy != null ? allocateMessageQueueStrategy.getName() : null;
         int retryTimes = 0;
         while (retryTimes++ < TIMEOUT_CHECK_TIMES) {
             try {
+                // 查询当前group在当前topic下的分配
                 Set<MessageQueueAssignment> resultSet = mQClientFactory.queryAssignment(topic, consumerGroup,
                     strategyName, messageModel, QUERY_ASSIGNMENT_TIMEOUT / TIMEOUT_CHECK_TIMES * retryTimes);
+                // 结果没使用到？可能只是验证strategyName是否可行
+
+                // 放入topicBrokerRebalance，下次执行直接成功
                 topicBrokerRebalance.put(topic, topic);
                 return true;
             } catch (Throwable t) {
                 if (!(t instanceof RemotingTimeoutException)) {
                     log.error("tryQueryAssignment error.", t);
-                    topicClientRebalance.put(topic, topic);
+                    topicClientRebalance.put(topic, topic);// 非超时错误，放入topicClientRebalance
                     return false;
                 }
             }
         }
         if (retryTimes >= TIMEOUT_CHECK_TIMES) {
             // if never success before and timeout exceed TIMEOUT_CHECK_TIMES, force client rebalance
-            topicClientRebalance.put(topic, topic);
+            topicClientRebalance.put(topic, topic);// 重试超过限制，放入topicClientRebalance
             return false;
         }
         return true;
@@ -299,9 +315,11 @@ public abstract class RebalanceImpl {
     private boolean rebalanceByTopic(final String topic, final boolean isOrder) {
         boolean balanced = true;
         switch (messageModel) {
-            case BROADCASTING: {
+            case BROADCASTING: {// 广播
+                // 广播就是全量mq
                 Set<MessageQueue> mqSet = this.topicSubscribeInfoTable.get(topic);
                 if (mqSet != null) {
+                    // 把最新更新本地内存
                     boolean changed = this.updateProcessQueueTableInRebalance(topic, mqSet, isOrder);
                     if (changed) {
                         this.messageQueueChanged(topic, mqSet, mqSet);
@@ -309,14 +327,16 @@ public abstract class RebalanceImpl {
                     }
 
                     balanced = mqSet.equals(getWorkingMessageQueue(topic));
-                } else {
+                } else {// 大概就是本地没MessageQueue，就是topic不存在
                     this.messageQueueChanged(topic, Collections.<MessageQueue>emptySet(), Collections.<MessageQueue>emptySet());
                     log.warn("doRebalance, {}, but the topic[{}] not exist.", consumerGroup, topic);
                 }
                 break;
             }
-            case CLUSTERING: {
+            case CLUSTERING: {// 集群
                 Set<MessageQueue> mqSet = this.topicSubscribeInfoTable.get(topic);
+
+                // 获取当前group下对这个topic的所以消费者
                 List<String> cidAll = this.mQClientFactory.findConsumerIdList(topic, consumerGroup);
                 if (null == mqSet) {
                     if (!topic.startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
@@ -330,6 +350,7 @@ public abstract class RebalanceImpl {
                 }
 
                 if (mqSet != null && cidAll != null) {
+                    // topic下的queue
                     List<MessageQueue> mqAll = new ArrayList<>();
                     mqAll.addAll(mqSet);
 
@@ -340,6 +361,9 @@ public abstract class RebalanceImpl {
 
                     List<MessageQueue> allocateResult = null;
                     try {
+                        /**
+                         * 执行分配，生成当前实例能分配到的queue
+                         */
                         allocateResult = strategy.allocate(
                             this.consumerGroup,
                             this.mQClientFactory.getClientId(),
@@ -354,7 +378,7 @@ public abstract class RebalanceImpl {
                     if (allocateResult != null) {
                         allocateResultSet.addAll(allocateResult);
                     }
-
+                    // 更新到本地内存
                     boolean changed = this.updateProcessQueueTableInRebalance(topic, allocateResultSet, isOrder);
                     if (changed) {
                         log.info(
@@ -364,6 +388,8 @@ public abstract class RebalanceImpl {
                         this.messageQueueChanged(topic, mqSet, allocateResultSet);
                     }
 
+                    // 判断是否相同更本地是否已跟远程平衡？
+                    // 有序下lock 队列失败，才会不平衡
                     balanced = allocateResultSet.equals(getWorkingMessageQueue(topic));
                 }
                 break;
@@ -379,6 +405,7 @@ public abstract class RebalanceImpl {
         String strategyName = this.allocateMessageQueueStrategy.getName();
         Set<MessageQueueAssignment> messageQueueAssignments;
         try {
+            // 执行请求QUERY_ASSIGNMENT
             messageQueueAssignments = this.mQClientFactory.queryAssignment(topic, consumerGroup,
                 strategyName, messageModel, QUERY_ASSIGNMENT_TIMEOUT);
         } catch (Exception e) {
@@ -391,12 +418,14 @@ public abstract class RebalanceImpl {
             return false;
         }
         Set<MessageQueue> mqSet = new HashSet<>();
+        // 解析messageQueueAssignments，放入到mqSet
         for (MessageQueueAssignment messageQueueAssignment : messageQueueAssignments) {
             if (messageQueueAssignment.getMessageQueue() != null) {
                 mqSet.add(messageQueueAssignment.getMessageQueue());
             }
         }
         Set<MessageQueue> mqAll = null;
+        // 更新到分配到的queue，这里会把 新的queue提交到 pullService开始pull任务
         boolean changed = this.updateMessageQueueAssignment(topic, messageQueueAssignments, isOrder);
         if (changed) {
             log.info("broker rebalanced result changed. allocateMessageQueueStrategyName={}, group={}, topic={}, clientId={}, assignmentSet={}",
@@ -481,8 +510,9 @@ public abstract class RebalanceImpl {
             Entry<MessageQueue, ProcessQueue> next = it.next();
             MessageQueue mq = next.getKey();
             ProcessQueue pq = next.getValue();
-
+            // 找到当前topic的 mq队列
             if (mq.getTopic().equals(topic)) {
+                // 新的不包含，加入移除
                 if (!mqSet.contains(mq)) {
                     pq.setDropped(true);
                     removeQueueMap.put(mq, pq);
@@ -495,6 +525,7 @@ public abstract class RebalanceImpl {
             }
         }
 
+        // 执行移除
         // remove message queues no longer belong me
         for (Entry<MessageQueue, ProcessQueue> entry : removeQueueMap.entrySet()) {
             MessageQueue mq = entry.getKey();
@@ -507,15 +538,16 @@ public abstract class RebalanceImpl {
             }
         }
 
+        // 新增队列
         // add new message queue
         boolean allMQLocked = true;
         List<PullRequest> pullRequestList = new ArrayList<>();
         for (MessageQueue mq : mqSet) {
-            if (!this.processQueueTable.containsKey(mq)) {
-                if (isOrder && !this.lock(mq)) {
+            if (!this.processQueueTable.containsKey(mq)) {// 未有的
+                if (isOrder && !this.lock(mq)) {// 需要有序，所以lock 队列
                     log.warn("doRebalance, {}, add a new mq failed, {}, because lock failed", consumerGroup, mq);
                     allMQLocked = false;
-                    continue;
+                    continue;// 未成功锁，则不处理当前队列
                 }
 
                 this.removeDirtyOffset(mq);
@@ -523,16 +555,21 @@ public abstract class RebalanceImpl {
                 pq.setLocked(true);
                 long nextOffset = this.computePullFromWhere(mq);
                 if (nextOffset >= 0) {
+                    // 放入到processQueueTable
                     ProcessQueue pre = this.processQueueTable.putIfAbsent(mq, pq);
                     if (pre != null) {
+                        // 已存在
                         log.info("doRebalance, {}, mq already exists, {}", consumerGroup, mq);
                     } else {
+                        // 新增1个队列
                         log.info("doRebalance, {}, add a new mq, {}", consumerGroup, mq);
                         PullRequest pullRequest = new PullRequest();
                         pullRequest.setConsumerGroup(consumerGroup);
                         pullRequest.setNextOffset(nextOffset);
                         pullRequest.setMessageQueue(mq);
                         pullRequest.setProcessQueue(pq);
+
+                        // 加入1个当前队列的pull请求
                         pullRequestList.add(pullRequest);
                         changed = true;
                     }
@@ -543,10 +580,11 @@ public abstract class RebalanceImpl {
 
         }
 
-        if (!allMQLocked) {
+        if (!allMQLocked) {// 发生lock 队列失败，500ms再执行rebalacne
             mQClientFactory.rebalanceLater(500);
         }
 
+        // 发送pull-》只有push下有实现
         this.dispatchPullRequest(pullRequestList, 500);
 
         return changed;
@@ -556,21 +594,30 @@ public abstract class RebalanceImpl {
         final boolean isOrder) {
         boolean changed = false;
 
-        Map<MessageQueue, MessageQueueAssignment> mq2PushAssignment = new HashMap<>();
-        Map<MessageQueue, MessageQueueAssignment> mq2PopAssignment = new HashMap<>();
+        Map<MessageQueue, MessageQueueAssignment> mq2PushAssignment = new HashMap<>();// pull模式的queuq
+        Map<MessageQueue, MessageQueueAssignment> mq2PopAssignment = new HashMap<>();// pop模式的queuq
+
+        // 每个queue的Assignment信息
         for (MessageQueueAssignment assignment : assignments) {
             MessageQueue messageQueue = assignment.getMessageQueue();
             if (messageQueue == null) {
                 continue;
             }
+            // 拉取模式
             if (MessageRequestMode.POP == assignment.getMode()) {
+                // pop模式
                 mq2PopAssignment.put(messageQueue, assignment);
             } else {
+                // pull模式
                 mq2PushAssignment.put(messageQueue, assignment);
             }
         }
 
+        //只是单1模式的移除
         if (!topic.startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
+            // 非重试队列
+
+            // 单pop
             if (mq2PopAssignment.isEmpty() && !mq2PushAssignment.isEmpty()) {
                 //pop switch to push
                 //subscribe pop retry topic
@@ -582,11 +629,14 @@ public abstract class RebalanceImpl {
                 }
 
             } else if (!mq2PopAssignment.isEmpty() && mq2PushAssignment.isEmpty()) {
+                // 单pull
+
                 //push switch to pop
                 //unsubscribe pop retry topic
                 try {
+                    // 构建当前topic的重试pop                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           队列名
                     final String retryTopic = KeyBuilder.buildPopRetryTopic(topic, getConsumerGroup());
-                    getSubscriptionInner().remove(retryTopic);
+                    getSubscriptionInner().remove(retryTopic);// 本地移除订阅当前topic的重试pop队列名
                 } catch (Exception ignored) {
                 }
 
@@ -602,9 +652,11 @@ public abstract class RebalanceImpl {
                 MessageQueue mq = next.getKey();
                 ProcessQueue pq = next.getValue();
 
+                // 当前topic的queue
                 if (mq.getTopic().equals(topic)) {
+                    // 新的分配没有这个queue
                     if (!mq2PushAssignment.containsKey(mq)) {
-                        pq.setDropped(true);
+                        pq.setDropped(true);// 删除
                         removeQueueMap.put(mq, pq);
                     } else if (pq.isPullExpired() && this.consumeType() == ConsumeType.CONSUME_PASSIVELY) {
                         pq.setDropped(true);
@@ -619,6 +671,7 @@ public abstract class RebalanceImpl {
                 MessageQueue mq = entry.getKey();
                 ProcessQueue pq = entry.getValue();
 
+                // 执行移除
                 if (this.removeUnnecessaryMessageQueue(mq, pq)) {
                     this.processQueueTable.remove(mq);
                     changed = true;
@@ -662,22 +715,31 @@ public abstract class RebalanceImpl {
         }
 
         {
+            // PullRequest相关
             // add new message queue
             boolean allMQLocked = true;
             List<PullRequest> pullRequestList = new ArrayList<>();
+            // 遍历每个queue
             for (MessageQueue mq : mq2PushAssignment.keySet()) {
+                // processQueueTable 未有这个queue才执行
                 if (!this.processQueueTable.containsKey(mq)) {
+                    // 有序的需要先lock 这个queue
                     if (isOrder && !this.lock(mq)) {
                         log.warn("doRebalance, {}, add a new mq failed, {}, because lock failed", consumerGroup, mq);
-                        allMQLocked = false;
+                        allMQLocked = false;// 有未lock成功
                         continue;
                     }
-
+                    // 清掉本地内存中这个queue的offset
                     this.removeDirtyOffset(mq);
+
+                    /**
+                     * 创建ProcessQueue！！！
+                     */
                     ProcessQueue pq = createProcessQueue();
-                    pq.setLocked(true);
+                    pq.setLocked(true);// 创建是就locked
                     long nextOffset = -1L;
                     try {
+                        // 根据策略，获取消费开始offset！！！
                         nextOffset = this.computePullFromWhereWithException(mq);
                     } catch (Exception e) {
                         log.info("doRebalance, {}, compute offset failed, {}", consumerGroup, mq);
@@ -685,14 +747,18 @@ public abstract class RebalanceImpl {
                     }
 
                     if (nextOffset >= 0) {
+                        // offset是正确可用的
+
+                        // 当前queue的ProcessQueue 放入到 processQueueTable
                         ProcessQueue pre = this.processQueueTable.putIfAbsent(mq, pq);
-                        if (pre != null) {
+                        if (pre != null) {// 本地已保存过，不更新-》不提交PullRequest
                             log.info("doRebalance, {}, mq already exists, {}", consumerGroup, mq);
                         } else {
+                            // 新增的，所以封装1个PullRequest
                             log.info("doRebalance, {}, add a new mq, {}", consumerGroup, mq);
                             PullRequest pullRequest = new PullRequest();
                             pullRequest.setConsumerGroup(consumerGroup);
-                            pullRequest.setNextOffset(nextOffset);
+                            pullRequest.setNextOffset(nextOffset);// 开始offset
                             pullRequest.setMessageQueue(mq);
                             pullRequest.setProcessQueue(pq);
                             pullRequestList.add(pullRequest);
@@ -703,14 +769,17 @@ public abstract class RebalanceImpl {
                     }
                 }
             }
-
+            // 当前topic的queue有未lock成功的，500ms再rebalance
             if (!allMQLocked) {
                 mQClientFactory.rebalanceLater(500);
             }
+
+            // 提交新增的PullRequest，500ms后执行 -》这些queue的消费任务准备开始！！！
             this.dispatchPullRequest(pullRequestList, 500);
         }
 
         {
+            // 封装popRequestList
             // add new message queue
             List<PopRequest> popRequestList = new ArrayList<>();
             for (MessageQueue mq : mq2PopAssignment.keySet()) {
@@ -727,12 +796,13 @@ public abstract class RebalanceImpl {
                         popRequest.setMessageQueue(mq);
                         popRequest.setPopProcessQueue(pq);
                         popRequest.setInitMode(getConsumeInitMode());
-                        popRequestList.add(popRequest);
+                        popRequestList.add(popRequest);// 封装后加入到popRequestList
                         changed = true;
                     }
                 }
             }
 
+            // 提交popRequestList
             this.dispatchPopPullRequest(popRequestList, 500);
         }
 

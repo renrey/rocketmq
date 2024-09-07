@@ -114,6 +114,7 @@ public abstract class ServiceThread implements Runnable {
         waitPoint.reset();
 
         try {
+            // 等待被触发
             waitPoint.await(interval, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             log.error("Interrupted", e);

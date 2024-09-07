@@ -59,7 +59,8 @@ public class AllocateMappedFileService extends ServiceThread {
             }
         }
 
-        AllocateRequest nextReq = new AllocateRequest(nextFilePath, fileSize);
+        AllocateRequest nextReq = new AllocateRequest(nextFilePath, fileSize);// 生成任务请求，参数文件路径、文件大小
+        // 把任务放入到requestTable
         boolean nextPutOK = this.requestTable.putIfAbsent(nextFilePath, nextReq) == null;
 
         if (nextPutOK) {
@@ -69,6 +70,7 @@ public class AllocateMappedFileService extends ServiceThread {
                 this.requestTable.remove(nextFilePath);
                 return null;
             }
+            // 提交任务到阻塞队列，异步执行任务
             boolean offerOK = this.requestQueue.offer(nextReq);
             if (!offerOK) {
                 log.warn("never expected here, add a request to preallocate queue failed");
@@ -76,8 +78,9 @@ public class AllocateMappedFileService extends ServiceThread {
             canSubmitRequests--;
         }
 
+        // 重试放入-> 可能第一次canSubmitRequests不够
         AllocateRequest nextNextReq = new AllocateRequest(nextNextFilePath, fileSize);
-        boolean nextNextPutOK = this.requestTable.putIfAbsent(nextNextFilePath, nextNextReq) == null;
+        boolean nextNextPutOK = this.requestTable.putIfAbsent(nextNextFilePath, nextNextReq) == null;//
         if (nextNextPutOK) {
             if (canSubmitRequests <= 0) {
                 log.warn("[NOTIFYME]TransientStorePool is not enough, so skip preallocate mapped file, " +
@@ -96,17 +99,21 @@ public class AllocateMappedFileService extends ServiceThread {
             return null;
         }
 
+        // 从requestTable获取任务执行完的后结果对象
         AllocateRequest result = this.requestTable.get(nextFilePath);
         try {
             if (result != null) {
-                messageStore.getPerfCounter().startTick("WAIT_MAPFILE_TIME_MS");
+                messageStore.getPerfCounter().startTick("WAIT_MAPFILE_TIME_MS");// 开始
+                // 等待执行完成
                 boolean waitOK = result.getCountDownLatch().await(waitTimeOut, TimeUnit.MILLISECONDS);
                 messageStore.getPerfCounter().endTick("WAIT_MAPFILE_TIME_MS");
                 if (!waitOK) {
                     log.warn("create mmap timeout " + result.getFilePath() + " " + result.getFileSize());
                     return null;
                 } else {
-                    this.requestTable.remove(nextFilePath);
+                    this.requestTable.remove(nextFilePath);// 从任务table删除
+
+                    // 返回mmap后的fd！！！
                     return result.getMappedFile();
                 }
             } else {
@@ -141,6 +148,7 @@ public class AllocateMappedFileService extends ServiceThread {
     public void run() {
         log.info(this.getServiceName() + " service started");
 
+        // 一直运行，主要用异步执行触发mmap的操作
         while (!this.isStopped() && this.mmapOperation()) {
 
         }
@@ -154,8 +162,9 @@ public class AllocateMappedFileService extends ServiceThread {
         boolean isSuccess = false;
         AllocateRequest req = null;
         try {
+            // 需要mmap的任务获取
             req = this.requestQueue.take();
-            AllocateRequest expectedRequest = this.requestTable.get(req.getFilePath());
+            AllocateRequest expectedRequest = this.requestTable.get(req.getFilePath());// 文件相关参数
             if (null == expectedRequest) {
                 log.warn("this mmap request expired, maybe cause timeout " + req.getFilePath() + " "
                     + req.getFileSize());
@@ -171,7 +180,7 @@ public class AllocateMappedFileService extends ServiceThread {
                 long beginTime = System.currentTimeMillis();
 
                 MappedFile mappedFile;
-                if (messageStore.isTransientStorePoolEnable()) {
+                if (messageStore.isTransientStorePoolEnable()) {// 默认没开启
                     try {
                         mappedFile = ServiceLoader.load(MappedFile.class).iterator().next();
                         mappedFile.init(req.getFilePath(), req.getFileSize(), messageStore.getTransientStorePool());
@@ -180,6 +189,7 @@ public class AllocateMappedFileService extends ServiceThread {
                         mappedFile = new DefaultMappedFile(req.getFilePath(), req.getFileSize(), messageStore.getTransientStorePool());
                     }
                 } else {
+                    // 使用文件参数创建
                     mappedFile = new DefaultMappedFile(req.getFilePath(), req.getFileSize());
                 }
 
@@ -190,16 +200,18 @@ public class AllocateMappedFileService extends ServiceThread {
                         + " " + req.getFilePath() + " " + req.getFileSize());
                 }
 
+                // 预热文件相关，条件大于commitlog文件大小（1G），且开启预热配置（默认没开启）
                 // pre write mappedFile
                 if (mappedFile.getFileSize() >= this.messageStore.getMessageStoreConfig()
                     .getMappedFileSizeCommitLog()
                     &&
                     this.messageStore.getMessageStoreConfig().isWarmMapedFileEnable()) {
+                    // 预热
                     mappedFile.warmMappedFile(this.messageStore.getMessageStoreConfig().getFlushDiskType(),
                         this.messageStore.getMessageStoreConfig().getFlushLeastPagesWhenWarmMapedFile());
                 }
 
-                req.setMappedFile(mappedFile);
+                req.setMappedFile(mappedFile);// 放入req
                 this.hasException = false;
                 isSuccess = true;
             }
@@ -218,6 +230,7 @@ public class AllocateMappedFileService extends ServiceThread {
                 }
             }
         } finally {
+            // 唤醒提交线程
             if (req != null && isSuccess)
                 req.getCountDownLatch().countDown();
         }

@@ -35,6 +35,7 @@ public class InvocationChannel extends SimpleChannel {
 
     @Override
     public ChannelFuture writeAndFlush(Object msg) {
+        // 命令对象
         if (msg instanceof RemotingCommand) {
             RemotingCommand responseCommand = (RemotingCommand) msg;
             InvocationContextInterface context = inFlightRequestMap.remove(responseCommand.getOpaque());

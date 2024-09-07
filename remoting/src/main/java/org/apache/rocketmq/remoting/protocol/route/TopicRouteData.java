@@ -32,11 +32,11 @@ import org.apache.rocketmq.remoting.protocol.statictopic.TopicQueueMappingInfo;
 
 public class TopicRouteData extends RemotingSerializable {
     private String orderTopicConf;
-    private List<QueueData> queueDatas;
-    private List<BrokerData> brokerDatas;
+    private List<QueueData> queueDatas;// topic下的queue信息
+    private List<BrokerData> brokerDatas;// queue使用的broker集群信息
     private HashMap<String/* brokerAddr */, List<String>/* Filter Server */> filterServerTable;
     //It could be null or empty
-    private Map<String/*brokerName*/, TopicQueueMappingInfo> topicQueueMappingByBroker;
+    private Map<String/*brokerName*/, TopicQueueMappingInfo> topicQueueMappingByBroker;// 通过broker集群名，对应信息
 
     public TopicRouteData() {
         queueDatas = new ArrayList<>();

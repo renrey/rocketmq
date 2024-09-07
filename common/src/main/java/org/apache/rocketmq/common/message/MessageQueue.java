@@ -21,8 +21,8 @@ import java.io.Serializable;
 public class MessageQueue implements Comparable<MessageQueue>, Serializable {
     private static final long serialVersionUID = 6191200464116433425L;
     private String topic;
-    private String brokerName;
-    private int queueId;
+    private String brokerName;// 主从broker集群的名字
+    private int queueId;// 单一队列的标识，如kafka的分区
 
     public MessageQueue() {
 

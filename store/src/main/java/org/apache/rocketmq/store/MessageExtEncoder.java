@@ -146,7 +146,7 @@ public class MessageExtEncoder {
         // 14 Prepared Transaction Offset
         this.byteBuf.writeLong(msgInner.getPreparedTransactionOffset());
         // 15 BODY
-        this.byteBuf.writeInt(bodyLength);
+        this.byteBuf.writeInt(bodyLength);// 先写长度，再写内容
         if (bodyLength > 0)
             this.byteBuf.writeBytes(msgInner.getBody());
 

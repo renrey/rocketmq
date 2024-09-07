@@ -46,9 +46,10 @@ public class CommitLogDispatcherCalcBitMap implements CommitLogDispatcher {
 
     @Override
     public void dispatch(DispatchRequest request) {
-        if (!this.brokerConfig.isEnableCalcFilterBitMap()) {
+        if (!this.brokerConfig.isEnableCalcFilterBitMap()) {// 默认没开启
             return;
         }
+        // 开启了，就用位图代替 filter计算
 
         try {
 

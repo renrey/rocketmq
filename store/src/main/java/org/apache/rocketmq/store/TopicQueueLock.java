@@ -43,6 +43,7 @@ public class TopicQueueLock {
     }
 
     public void lock(String topicQueueKey) {
+        // hash后取模 的分区锁
         Lock lock = this.lockList.get((topicQueueKey.hashCode() & 0x7fffffff) % this.size);
         lock.lock();
     }

@@ -51,7 +51,7 @@ import org.apache.rocketmq.store.util.PerfCounter;
 public interface MessageStore {
 
     /**
-     * Load previously stored messages.
+     * Load previously stored messages. 加载以前的消息
      *
      * @return true if success; false otherwise.
      */

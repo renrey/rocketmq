@@ -59,35 +59,39 @@ import sun.misc.Unsafe;
 import sun.nio.ch.DirectBuffer;
 
 public class DefaultMappedFile extends AbstractMappedFile {
-    public static final int OS_PAGE_SIZE = 1024 * 4;
+    // start -- 静态遍历 共享的
+    public static final int OS_PAGE_SIZE = 1024 * 4;// 默认当前os的page （cache）大小：4kb
     public static final Unsafe UNSAFE = getUnsafe();
     private static final Method IS_LOADED_METHOD;
     public static final int UNSAFE_PAGE_SIZE = UNSAFE == null ? OS_PAGE_SIZE : UNSAFE.pageSize();
 
     protected static final Logger log = LoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
-    protected static final AtomicLong TOTAL_MAPPED_VIRTUAL_MEMORY = new AtomicLong(0);
+    protected static final AtomicLong TOTAL_MAPPED_VIRTUAL_MEMORY = new AtomicLong(0);// 统计当前进程 mmap文件 使用了多少内存空间
 
-    protected static final AtomicInteger TOTAL_MAPPED_FILES = new AtomicInteger(0);
+    protected static final AtomicInteger TOTAL_MAPPED_FILES = new AtomicInteger(0);// 统计mmap多少文件
 
+    // 3种Position的原子更新类
     protected static final AtomicIntegerFieldUpdater<DefaultMappedFile> WROTE_POSITION_UPDATER;
     protected static final AtomicIntegerFieldUpdater<DefaultMappedFile> COMMITTED_POSITION_UPDATER;
     protected static final AtomicIntegerFieldUpdater<DefaultMappedFile> FLUSHED_POSITION_UPDATER;
+    // end --- 静态
 
-    protected volatile int wrotePosition;
-    protected volatile int committedPosition;
-    protected volatile int flushedPosition;
-    protected int fileSize;
-    protected FileChannel fileChannel;
+    protected volatile int wrotePosition;// 已经写入的位置
+    protected volatile int committedPosition;// 已经commit的位置
+    protected volatile int flushedPosition;// 已经刷盘的文件位置
+    protected int fileSize;// 文件大小
+    protected FileChannel fileChannel;// 文件管道-》用于触发写入等操作，
     /**
      * Message will put to here first, and then reput to FileChannel if writeBuffer is not null.
      */
-    protected ByteBuffer writeBuffer = null;
+    protected ByteBuffer writeBuffer = null;// 写入数据堆内存buffer，用于触发fileChannel的写入，commit才清空，即暂时不写入page cache的内存
+    // 但是writeBuffer在commit后，就不再使用写入 -》即只有文件第一次写入使用commit后不使用
     protected TransientStorePool transientStorePool = null;
     protected String fileName;
     protected long fileFromOffset;
     protected File file;
-    protected MappedByteBuffer mappedByteBuffer;
+    protected MappedByteBuffer mappedByteBuffer;// mmap的，用于写入数据时，直接write堆外内存
     protected volatile long storeTimestamp = 0;
     protected boolean firstCreateInQueue = false;
     private long lastFlushTime = -1L;
@@ -109,6 +113,7 @@ public class DefaultMappedFile extends AbstractMappedFile {
     private long stopTimestamp = -1;
 
     static {
+        // 这3个是3种Position的原子更新类
         WROTE_POSITION_UPDATER = AtomicIntegerFieldUpdater.newUpdater(DefaultMappedFile.class, "wrotePosition");
         COMMITTED_POSITION_UPDATER = AtomicIntegerFieldUpdater.newUpdater(DefaultMappedFile.class, "committedPosition");
         FLUSHED_POSITION_UPDATER = AtomicIntegerFieldUpdater.newUpdater(DefaultMappedFile.class, "flushedPosition");
@@ -149,25 +154,31 @@ public class DefaultMappedFile extends AbstractMappedFile {
     @Override
     public void init(final String fileName, final int fileSize,
         final TransientStorePool transientStorePool) throws IOException {
+        // 1. 创建文件管道，mmap 映射
         init(fileName, fileSize);
-        this.writeBuffer = transientStorePool.borrowBuffer();
-        this.transientStorePool = transientStorePool;
+        this.writeBuffer = transientStorePool.borrowBuffer();// 初始从transientStorePool申请内存块
+        this.transientStorePool = transientStorePool;// 用于存储使用的临时内存池
     }
 
     private void init(final String fileName, final int fileSize) throws IOException {
         this.fileName = fileName;
         this.fileSize = fileSize;
         this.file = new File(fileName);
+
+        // 文件名转成
         this.fileFromOffset = Long.parseLong(this.file.getName());
         boolean ok = false;
 
         UtilAll.ensureDirOK(this.file.getParent());
 
         try {
+            // 1. 目标文件的管道创建
             this.fileChannel = new RandomAccessFile(this.file, "rw").getChannel();
+            // 2. mmap 映射 目标文件
             this.mappedByteBuffer = this.fileChannel.map(MapMode.READ_WRITE, 0, fileSize);
+            // 直接加入文件大小
             TOTAL_MAPPED_VIRTUAL_MEMORY.addAndGet(fileSize);
-            TOTAL_MAPPED_FILES.incrementAndGet();
+            TOTAL_MAPPED_FILES.incrementAndGet();// 文件数+1
             ok = true;
         } catch (FileNotFoundException e) {
             log.error("Failed to create file " + this.fileName, e);
@@ -241,16 +252,29 @@ public class DefaultMappedFile extends AbstractMappedFile {
     public AppendMessageResult appendMessage(final ByteBuffer byteBufferMsg, final CompactionAppendMsgCallback cb) {
         assert byteBufferMsg != null;
         assert cb != null;
-
+        // 获取已写入的位置-》本次写入开始的位置
         int currentPos = WROTE_POSITION_UPDATER.get(this);
         if (currentPos < this.fileSize) {
+            // 当前文件未写满
+
+            // 如果当前有writeBuffer（中间缓存），则使用，否则就是mmap 的fd
+            /**
+             * 2种写缓存方式：writeBuffer-- 堆写缓存用于传统write，需要触发多一步写流 ， mmap--写堆外用于直接让os写文件
+             * 但是writeBuffer只是文件第一次写使用的方式（未commit）
+             * 触发commit后，后面都是使用mmap的方式
+             *
+             */
             ByteBuffer byteBuffer = appendMessageBuffer().slice();
-            byteBuffer.position(currentPos);
+            byteBuffer.position(currentPos);// 开始位置更新
+            // 往byteBuffer 空间 写入内容（最大this.fileSize - currentPos-》即当前文件剩余空间）
+            // 2种情况：有writeBuffer-> 写入中间缓存 ，mmap文件-> 直接写入文件（page cache）
             AppendMessageResult result = cb.doAppend(byteBuffer, this.fileFromOffset, this.fileSize - currentPos, byteBufferMsg);
+            // 记录器加 本次写入大小
             WROTE_POSITION_UPDATER.addAndGet(this, result.getWroteBytes());
-            this.storeTimestamp = result.getStoreTimestamp();
+            this.storeTimestamp = result.getStoreTimestamp();// 更新时间戳
             return result;
         }
+        // 已写满了，但没重置已写入大小-》错误
         log.error("MappedFile.appendMessage return null, wrotePosition: {} fileSize: {}", currentPos, this.fileSize);
         return new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR);
     }
@@ -275,14 +299,22 @@ public class DefaultMappedFile extends AbstractMappedFile {
         int currentPos = WROTE_POSITION_UPDATER.get(this);
 
         if (currentPos < this.fileSize) {
+            // 文件未满，可写入
+
+            // 获取writeBuffer 或者mmap的buffer
             ByteBuffer byteBuffer = appendMessageBuffer().slice();
             byteBuffer.position(currentPos);
             AppendMessageResult result;
+
+            // 执行写入
             if (messageExt instanceof MessageExtBatch && !((MessageExtBatch) messageExt).isInnerBatch()) {
+                // 批量消息
                 // traditional batch message
                 result = cb.doAppend(this.getFileFromOffset(), byteBuffer, this.fileSize - currentPos,
                     (MessageExtBatch) messageExt, putMessageContext);
             } else if (messageExt instanceof MessageExtBrokerInner) {
+                // 单条消息
+                // 新出的批量消息
                 // traditional single message or newly introduced inner-batch message
                 result = cb.doAppend(this.getFileFromOffset(), byteBuffer, this.fileSize - currentPos,
                     (MessageExtBrokerInner) messageExt, putMessageContext);
@@ -293,12 +325,14 @@ public class DefaultMappedFile extends AbstractMappedFile {
             this.storeTimestamp = result.getStoreTimestamp();
             return result;
         }
+        // 已满错误
         log.error("MappedFile.appendMessage return null, wrotePosition: {} fileSize: {}", currentPos, this.fileSize);
         return new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR);
     }
 
     protected ByteBuffer appendMessageBuffer() {
         this.mappedByteBufferAccessCountSinceLastSwap++;
+        // 返回writeBuffer，无则直接文件流
         return writeBuffer != null ? writeBuffer : this.mappedByteBuffer;
     }
 
@@ -312,6 +346,7 @@ public class DefaultMappedFile extends AbstractMappedFile {
         return appendMessage(data, 0, data.length);
     }
 
+    // 效果就是追加写
     @Override
     public boolean appendMessage(ByteBuffer data) {
         int currentPos = WROTE_POSITION_UPDATER.get(this);
@@ -321,6 +356,7 @@ public class DefaultMappedFile extends AbstractMappedFile {
             try {
                 this.fileChannel.position(currentPos);
                 while (data.hasRemaining()) {
+                    // write()写入文件fd（page）
                     this.fileChannel.write(data);
                 }
             } catch (Throwable e) {
@@ -363,24 +399,29 @@ public class DefaultMappedFile extends AbstractMappedFile {
     @Override
     public int flush(final int flushLeastPages) {
         if (this.isAbleToFlush(flushLeastPages)) {
-            if (this.hold()) {
+            // 可以进行flush（待flush的page数达到指定 参数、有可flush、已写满）
+            if (this.hold()) {// 当前对象加锁，串行执行
                 int value = getReadPosition();
 
                 try {
                     this.mappedByteBufferAccessCountSinceLastSwap++;
-
+                    // 执行fsync
                     //We only append data to fileChannel or mappedByteBuffer, never both.
                     if (writeBuffer != null || this.fileChannel.position() != 0) {
-                        this.fileChannel.force(false);
+                        // 其实就是写数据到writeBuffer，就是传统write写入文件
+                        // 有writeBuffer
+                        // OR 对文件（非mmap映射fd）写入
+                        this.fileChannel.force(false);// 对文件本身flush
                     } else {
-                        this.mappedByteBuffer.force();
+                        // 没writeBuffer就是不用堆内存做缓冲，直接写堆外空间，所以flush mmap的fd
+                        this.mappedByteBuffer.force();// 对mmap flush
                     }
                     this.lastFlushTime = System.currentTimeMillis();
                 } catch (Throwable e) {
                     log.error("Error occurred when force data to disk.", e);
                 }
 
-                FLUSHED_POSITION_UPDATER.set(this, value);
+                FLUSHED_POSITION_UPDATER.set(this, value);// 更新已flush位置
                 this.release();
             } else {
                 log.warn("in flush, hold failed, flush offset = " + FLUSHED_POSITION_UPDATER.get(this));
@@ -392,6 +433,7 @@ public class DefaultMappedFile extends AbstractMappedFile {
 
     @Override
     public int commit(final int commitLeastPages) {
+        // 无writeBuffer，commit无效-》需要申请writeBuffer空间，并写入
         if (writeBuffer == null) {
             //no need to commit data to file channel, so just regard wrotePosition as committedPosition.
             return WROTE_POSITION_UPDATER.get(this);
@@ -401,18 +443,22 @@ public class DefaultMappedFile extends AbstractMappedFile {
         if (transientStorePool != null && !transientStorePool.isRealCommit()) {
             COMMITTED_POSITION_UPDATER.set(this, WROTE_POSITION_UPDATER.get(this));
         } else if (this.isAbleToCommit(commitLeastPages)) {
-            if (this.hold()) {
+            // 提交
+            if (this.hold()) {// 同步方法并发控制commit进入
+                // 执行commit-》写入到文件（本身fd，非mmap的）cache
                 commit0();
-                this.release();
+                this.release();// 释放hold的计数
             } else {
                 log.warn("in commit, hold failed, commit offset = " + COMMITTED_POSITION_UPDATER.get(this));
             }
         }
 
+        // commit 到文件流完成后，清空buffer
         // All dirty data has been committed to FileChannel.
         if (writeBuffer != null && this.transientStorePool != null && this.fileSize == COMMITTED_POSITION_UPDATER.get(this)) {
-            this.transientStorePool.returnBuffer(writeBuffer);
-            this.writeBuffer = null;
+            // 把writeBuffer使用的内存块归还回池
+            this.transientStorePool.returnBuffer(writeBuffer);// 归还
+            this.writeBuffer = null;// 并且 清理buffer引用 -》好像后面再也没有申请的地方
         }
 
         return COMMITTED_POSITION_UPDATER.get(this);
@@ -428,8 +474,8 @@ public class DefaultMappedFile extends AbstractMappedFile {
                 byteBuffer.position(lastCommittedPosition);
                 byteBuffer.limit(writePos);
                 this.fileChannel.position(lastCommittedPosition);
-                this.fileChannel.write(byteBuffer);
-                COMMITTED_POSITION_UPDATER.set(this, writePos);
+                this.fileChannel.write(byteBuffer);// 直接往文件的fd （不是mmap的）写入page cache
+                COMMITTED_POSITION_UPDATER.set(this, writePos);// 更新commit位置
             } catch (Throwable e) {
                 log.error("Error occurred when commit data to FileChannel.", e);
             }
@@ -440,14 +486,16 @@ public class DefaultMappedFile extends AbstractMappedFile {
         int flush = FLUSHED_POSITION_UPDATER.get(this);
         int write = getReadPosition();
 
+        // 当前文件内容已写满-》可flush
         if (this.isFull()) {
             return true;
         }
 
         if (flushLeastPages > 0) {
+            // 需要flush page数达到 参数，返回true
             return ((write / OS_PAGE_SIZE) - (flush / OS_PAGE_SIZE)) >= flushLeastPages;
         }
-
+        // 没配置需要最少flush 页数，则看是否已经超过flush位置-》有可flush的
         return write > flush;
     }
 
@@ -488,8 +536,8 @@ public class DefaultMappedFile extends AbstractMappedFile {
             if (this.hold()) {
                 this.mappedByteBufferAccessCountSinceLastSwap++;
 
-                ByteBuffer byteBuffer = this.mappedByteBuffer.slice();
-                byteBuffer.position(pos);
+                ByteBuffer byteBuffer = this.mappedByteBuffer.slice();// 申请一个byteBuffer的副本（具体指向区域同一个）
+                byteBuffer.position(pos);// 更新开始为pos
                 ByteBuffer byteBufferNew = byteBuffer.slice();
                 byteBufferNew.limit(size);
                 return new SelectMappedBufferResult(this.fileFromOffset + pos, byteBufferNew, size, this);
@@ -536,12 +584,13 @@ public class DefaultMappedFile extends AbstractMappedFile {
                 + " have cleanup, do not do it again.");
             return true;
         }
-
+        // 清理空间
         UtilAll.cleanBuffer(this.mappedByteBuffer);
         UtilAll.cleanBuffer(this.mappedByteBufferWaitToClean);
         this.mappedByteBufferWaitToClean = null;
-        TOTAL_MAPPED_VIRTUAL_MEMORY.addAndGet(this.fileSize * (-1));
-        TOTAL_MAPPED_FILES.decrementAndGet();
+        // 计数清理
+        TOTAL_MAPPED_VIRTUAL_MEMORY.addAndGet(this.fileSize * (-1));// 已mmap空间
+        TOTAL_MAPPED_FILES.decrementAndGet();// 文件数-1
         log.info("unmap file[REF:" + currentRef + "] " + this.fileName + " OK");
         return true;
     }
@@ -607,7 +656,9 @@ public class DefaultMappedFile extends AbstractMappedFile {
         ByteBuffer byteBuffer = this.mappedByteBuffer.slice();
         long flush = 0;
         // long time = System.currentTimeMillis();
+        // 等于遍历当前文件的每个 page cache-
         for (long i = 0, j = 0; i < this.fileSize; i += DefaultMappedFile.OS_PAGE_SIZE, j++) {
+            // mmap 的堆外内存的 每个page 设置第1个放0 -》在内存申请page
             byteBuffer.put((int) i, (byte) 0);
             // force flush when flush disk type is sync
             if (type == FlushDiskType.SYNC_FLUSH) {

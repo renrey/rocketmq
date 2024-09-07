@@ -74,6 +74,7 @@ public class PullAPIWrapper {
         final SubscriptionData subscriptionData) {
         PullResultExt pullResultExt = (PullResultExt) pullResult;
 
+        // 更新返回推荐的请求broker节点 -》下次这个queue相关的，请求这个broker节点
         this.updatePullFromWhichNode(mq, pullResultExt.getSuggestWhichBrokerId());
         if (PullStatus.FOUND == pullResult.getPullStatus()) {
             ByteBuffer byteBuffer = ByteBuffer.wrap(pullResultExt.getMessageBinary());
@@ -192,10 +193,12 @@ public class PullAPIWrapper {
         final CommunicationMode communicationMode,
         final PullCallback pullCallback
     ) throws MQClientException, RemotingException, MQBrokerException, InterruptedException {
+        //获取具体broker节点信息
         FindBrokerResult findBrokerResult =
-            this.mQClientFactory.findBrokerAddressInSubscribe(this.mQClientFactory.getBrokerNameFromMessageQueue(mq),
-                this.recalculatePullFromWhichNode(mq), false);
+            this.mQClientFactory.findBrokerAddressInSubscribe(this.mQClientFactory.getBrokerNameFromMessageQueue(mq),// 当前queue对应的主从broker集群名
+                this.recalculatePullFromWhichNode(mq), false); // recalculatePullFromWhichNode: 在主从broker中选择请求broker，默认使用master，除非响应有推荐
         if (null == findBrokerResult) {
+            // 失败更新一次元数据
             this.mQClientFactory.updateTopicRouteInfoFromNameServer(mq.getTopic());
             findBrokerResult =
                 this.mQClientFactory.findBrokerAddressInSubscribe(this.mQClientFactory.getBrokerNameFromMessageQueue(mq),
@@ -233,11 +236,13 @@ public class PullAPIWrapper {
             requestHeader.setExpressionType(expressionType);
             requestHeader.setBname(mq.getBrokerName());
 
+            // 得到本次broker 节点
             String brokerAddr = findBrokerResult.getBrokerAddr();
             if (PullSysFlag.hasClassFilterFlag(sysFlagInner)) {
                 brokerAddr = computePullFromWhichFilterServer(mq.getTopic(), brokerAddr);
             }
 
+            // 向broker发送pull命令
             PullResult pullResult = this.mQClientFactory.getMQClientAPIImpl().pullMessage(
                 brokerAddr,
                 requestHeader,
@@ -286,11 +291,12 @@ public class PullAPIWrapper {
             return this.defaultBrokerId;
         }
 
+        // 如果有broker返回推荐请求broker，则使用
         AtomicLong suggest = this.pullFromWhichNodeTable.get(mq);
         if (suggest != null) {
             return suggest.get();
         }
-
+        // 无则master
         return MixAll.MASTER_ID;
     }
 

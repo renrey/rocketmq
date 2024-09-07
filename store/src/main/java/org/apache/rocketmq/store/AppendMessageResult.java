@@ -34,7 +34,7 @@ public class AppendMessageResult {
     // Message storage timestamp
     private long storeTimestamp;
     // Consume queue's offset(step by one)
-    private long logicsOffset;
+    private long logicsOffset;// cq的下标
     private long pagecacheRT = 0;
 
     private int msgNum = 1;

@@ -129,14 +129,16 @@ public class ProcessQueue {
     }
 
     public boolean putMessage(final List<MessageExt> msgs) {
+        // 作用就是把消息放入msgTreeMap，如果没有正在执行消费的，更新可运行标志
         boolean dispatchToConsume = false;
         try {
             this.treeMapLock.writeLock().lockInterruptibly();
             try {
                 int validMsgCnt = 0;
                 for (MessageExt msg : msgs) {
+                    // 放入map，队列offset，映射msg
                     MessageExt old = msgTreeMap.put(msg.getQueueOffset(), msg);
-                    if (null == old) {
+                    if (null == old) {// 新消费
                         validMsgCnt++;
                         this.queueOffsetMax = msg.getQueueOffset();
                         msgSize.addAndGet(msg.getBody().length);
@@ -144,9 +146,10 @@ public class ProcessQueue {
                 }
                 msgCount.addAndGet(validMsgCnt);
 
+                // 有消息需要消费且没有正在消费
                 if (!msgTreeMap.isEmpty() && !this.consuming) {
                     dispatchToConsume = true;
-                    this.consuming = true;
+                    this.consuming = true;// 更新状态，可以执行消费
                 }
 
                 if (!msgs.isEmpty()) {
@@ -169,11 +172,14 @@ public class ProcessQueue {
         return dispatchToConsume;
     }
 
+    // 当前缓存消息里offset差距
     public long getMaxSpan() {
         try {
+            // 读锁
             this.treeMapLock.readLock().lockInterruptibly();
             try {
                 if (!this.msgTreeMap.isEmpty()) {
+                    // 当前缓存的消息 最大跟最小的偏移量
                     return this.msgTreeMap.lastKey() - this.msgTreeMap.firstKey();
                 }
             } finally {
@@ -251,6 +257,7 @@ public class ProcessQueue {
         try {
             this.treeMapLock.writeLock().lockInterruptibly();
             try {
+                // 重新放入msgTreeMap-》待消费
                 this.msgTreeMap.putAll(this.consumingMsgOrderlyTreeMap);
                 this.consumingMsgOrderlyTreeMap.clear();
             } finally {
@@ -263,14 +270,18 @@ public class ProcessQueue {
 
     public long commit() {
         try {
+            // 写锁互斥
             this.treeMapLock.writeLock().lockInterruptibly();
             try {
+                // 当前缓存中，拿到最后1个消费的offset
                 Long offset = this.consumingMsgOrderlyTreeMap.lastKey();
+                // 等于减掉consumingMsgOrderlyTreeMap的消息数量
                 msgCount.addAndGet(0 - this.consumingMsgOrderlyTreeMap.size());
+                // 等于减掉消息大小
                 for (MessageExt msg : this.consumingMsgOrderlyTreeMap.values()) {
                     msgSize.addAndGet(0 - msg.getBody().length);
                 }
-                this.consumingMsgOrderlyTreeMap.clear();
+                this.consumingMsgOrderlyTreeMap.clear();// 清理内容
                 if (offset != null) {
                     return offset + 1;
                 }
@@ -309,9 +320,11 @@ public class ProcessQueue {
             try {
                 if (!this.msgTreeMap.isEmpty()) {
                     for (int i = 0; i < batchSize; i++) {
+                        // 从msgTreeMap按顺序 拉消息
                         Map.Entry<Long, MessageExt> entry = this.msgTreeMap.pollFirstEntry();
                         if (entry != null) {
                             result.add(entry.getValue());
+                            // 放入到consumingMsgOrderlyTreeMap -》准备消费
                             consumingMsgOrderlyTreeMap.put(entry.getKey(), entry.getValue());
                         } else {
                             break;

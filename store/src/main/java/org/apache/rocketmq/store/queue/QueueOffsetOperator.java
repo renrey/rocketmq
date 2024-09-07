@@ -37,10 +37,12 @@ public class QueueOffsetOperator {
     private ConcurrentMap<String, Long> batchTopicQueueTable = new ConcurrentHashMap<>(1024);
     private ConcurrentMap<String/* topic-queueid */, Long/* offset */> lmqTopicQueueTable = new ConcurrentHashMap<>(1024);
 
+    // 获取本次写入的offset
     public long getQueueOffset(String topicQueueKey) {
         return ConcurrentHashMapUtils.computeIfAbsent(this.topicQueueTable, topicQueueKey, k -> 0L);
     }
 
+    // 自增offset
     public void increaseQueueOffset(String topicQueueKey, short messageNum) {
         Long queueOffset = ConcurrentHashMapUtils.computeIfAbsent(this.topicQueueTable, topicQueueKey, k -> 0L);
         topicQueueTable.put(topicQueueKey, queueOffset + messageNum);

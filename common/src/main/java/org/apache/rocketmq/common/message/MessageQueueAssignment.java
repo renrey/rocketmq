@@ -23,7 +23,7 @@ public class MessageQueueAssignment implements Serializable {
 
     private static final long serialVersionUID = 8092600270527861645L;
 
-    private MessageQueue messageQueue;
+    private MessageQueue messageQueue;// 当前queue
 
     private MessageRequestMode mode = MessageRequestMode.PULL;
 

@@ -49,8 +49,9 @@ public class IndexService {
 
     public IndexService(final DefaultMessageStore store) {
         this.defaultMessageStore = store;
-        this.hashSlotNum = store.getMessageStoreConfig().getMaxHashSlotNum();
-        this.indexNum = store.getMessageStoreConfig().getMaxIndexNum();
+        this.hashSlotNum = store.getMessageStoreConfig().getMaxHashSlotNum();// 500W
+        this.indexNum = store.getMessageStoreConfig().getMaxIndexNum();// 2kw
+        // 就是index目录
         this.storePath =
             StorePathConfigHelper.getStorePathIndex(defaultMessageStore.getMessageStoreConfig().getStorePathRootDir());
     }
@@ -60,10 +61,11 @@ public class IndexService {
         File[] files = dir.listFiles();
         if (files != null) {
             // ascending order
-            Arrays.sort(files);
+            Arrays.sort(files);// 直接从小到大排序-》文件名纯数字
             for (File file : files) {
                 try {
                     IndexFile f = new IndexFile(file.getPath(), this.hashSlotNum, this.indexNum, 0, 0);
+                    // 加载文件
                     f.load();
 
                     if (!lastExitOK) {
@@ -208,6 +210,7 @@ public class IndexService {
     }
 
     public void buildIndex(DispatchRequest req) {
+        // 获取（创建）索引文件
         IndexFile indexFile = retryGetAndCreateIndexFile();
         if (indexFile != null) {
             long endPhyOffset = indexFile.getEndPhyOffset();
@@ -229,6 +232,9 @@ public class IndexService {
             }
 
             if (req.getUniqKey() != null) {
+                /**
+                 * 写入到index文件
+                 */
                 indexFile = putKey(indexFile, msg, buildKey(topic, req.getUniqKey()));
                 if (indexFile == null) {
                     LOGGER.error("putKey error commitlog {} uniqkey {}", req.getCommitLogOffset(), req.getUniqKey());
@@ -255,11 +261,16 @@ public class IndexService {
     }
 
     private IndexFile putKey(IndexFile indexFile, DispatchRequest msg, String idxKey) {
+        /**
+         * 构建索引关键!!!
+         * indexFile.putKey
+         */
+        // 一直写到成功为止
         for (boolean ok = indexFile.putKey(idxKey, msg.getCommitLogOffset(), msg.getStoreTimestamp()); !ok; ) {
             LOGGER.warn("Index file [" + indexFile.getFileName() + "] is full, trying to create another one");
 
             indexFile = retryGetAndCreateIndexFile();
-            if (null == indexFile) {
+            if (null == indexFile) {// 如果满了，创建失败则不继续
                 return null;
             }
 
@@ -306,13 +317,15 @@ public class IndexService {
         long lastUpdateIndexTimestamp = 0;
 
         {
-            this.readWriteLock.readLock().lock();
+            this.readWriteLock.readLock().lock();// 读锁-》只获取
             if (!this.indexFileList.isEmpty()) {
+                // 获取最后1个
                 IndexFile tmp = this.indexFileList.get(this.indexFileList.size() - 1);
                 if (!tmp.isWriteFull()) {
-                    indexFile = tmp;
+                    indexFile = tmp;// 未满不用创建
                 } else {
-                    lastUpdateEndPhyOffset = tmp.getEndPhyOffset();
+                    // 已满-》记录下标，用于创建下一个
+                    lastUpdateEndPhyOffset = tmp.getEndPhyOffset();// 最后下标
                     lastUpdateIndexTimestamp = tmp.getEndTimestamp();
                     prevIndexFile = tmp;
                 }
@@ -321,15 +334,19 @@ public class IndexService {
             this.readWriteLock.readLock().unlock();
         }
 
+        // 需要创建index文件
         if (indexFile == null) {
             try {
+                // 新的index文件名：当前时间
                 String fileName =
                     this.storePath + File.separator
                         + UtilAll.timeMillisToHumanString(System.currentTimeMillis());
+                // 创建初始化 index文件 -》文件header记录上一个文件的最后offset
                 indexFile =
                     new IndexFile(fileName, this.hashSlotNum, this.indexNum, lastUpdateEndPhyOffset,
                         lastUpdateIndexTimestamp);
-                this.readWriteLock.writeLock().lock();
+                this.readWriteLock.writeLock().lock();// 写入操作-》加写锁
+                // 就是把文件加入list
                 this.indexFileList.add(indexFile);
             } catch (Exception e) {
                 LOGGER.error("getLastIndexFile exception ", e);
@@ -337,9 +354,10 @@ public class IndexService {
                 this.readWriteLock.writeLock().unlock();
             }
 
+            // 获取到了index文件
             if (indexFile != null) {
                 final IndexFile flushThisFile = prevIndexFile;
-
+                // 创建1个线程：异步执行flush上一个index文件 （已满的）
                 Thread flushThread = new Thread(new AbstractBrokerRunnable(defaultMessageStore.getBrokerConfig()) {
                     @Override
                     public void run0() {
@@ -366,10 +384,14 @@ public class IndexService {
             indexMsgTimestamp = f.getEndTimestamp();
         }
 
+        // 把header信息写入bytebuffer，执行fsync
         f.flush();
 
+        // 有时间
         if (indexMsgTimestamp > 0) {
+            // checkpoint保存最后index时间, 对
             this.defaultMessageStore.getStoreCheckpoint().setIndexMsgTimestamp(indexMsgTimestamp);
+            // fsync checkpoint文件
             this.defaultMessageStore.getStoreCheckpoint().flush();
         }
     }

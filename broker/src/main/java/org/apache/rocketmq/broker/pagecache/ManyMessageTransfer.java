@@ -70,8 +70,10 @@ public class ManyMessageTransfer extends AbstractReferenceCounted implements Fil
             return transferred;
         } else {
             List<ByteBuffer> messageBufferList = this.getMessageResult.getMessageBufferList();
+            // 遍历消息bytebuf -> 实际都是mmap指向堆外区域内容 ，而这些区域的物理内存地址跟pagecache（内核空间）的一样
             for (ByteBuffer bb : messageBufferList) {
                 if (bb.hasRemaining()) {
+                    // 实际上传输：内核pagecache -》内核socket buffer
                     transferred += target.write(bb);
                     return transferred;
                 }

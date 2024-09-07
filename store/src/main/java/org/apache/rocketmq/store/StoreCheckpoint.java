@@ -83,6 +83,7 @@ public class StoreCheckpoint {
     }
 
     public void flush() {
+        // 就是保存当前属性
         this.mappedByteBuffer.putLong(0, this.physicMsgTimestamp);
         this.mappedByteBuffer.putLong(8, this.logicsMsgTimestamp);
         this.mappedByteBuffer.putLong(16, this.indexMsgTimestamp);
